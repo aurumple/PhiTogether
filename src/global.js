@@ -262,28 +262,28 @@ const ptAppInstance = createApp({
                 denyChartSettings: false,
                 showTransition: true,
                 feedback: false,
-                imageBlur: true,
+                imageBlur: false,
                 highLight: true,
                 showCE2: false,
                 lineColor: true,
                 showAcc: true,
                 showStat: false,
-                lowRes: false,
-                noUIBlur: false,
+                lowRes: true,
+                noUIBlur: true,
                 enhanceRankVis: false,
                 lockOri: true,
                 aspectRatio: "1.5",
                 noteScale: "1.15",
                 backgroundDim: "0.6",
                 volume: "1",
-                inputOffset: "0",
+                inputOffset: "90",
                 notifyFinished: false,
                 isMaxFrame: false,
                 maxFrame: 60,
                 isForcedMaxFrame: false,
-                enableVP: false,
+                enableVP: true,
                 enableFR: false,
-                autoDelay: true,
+                autoDelay: false,
                 usekwlevelOverbgm: false,
                 resourcesType: "together-pack-1",
                 prprRespackID: "",
@@ -637,7 +637,20 @@ const ptAppInstance = createApp({
             // 恢复保存的设置并使其生效
             await ptdb.gameConfig
                 .get()
-                .catch(() => JSON.parse(localStorage.getItem("PhiTogetherSettings") || "{}"))
+                .catch(() => {
+                    // 首次使用（IndexedDB 无存档）：默认应用低性能设备推荐配置
+                    //（隐藏距离较远的音符等，与 OneTap 一致）；用户可在设置页
+                    // 自由改回，之后以用户设置为准。
+                    const gc = ptmain.gameConfig;
+                    gc.imageBlur = false; // 关闭背景模糊
+                    gc.enableVP = true; // 隐藏距离较远的音符
+                    gc.noUIBlur = true; // 禁用界面模糊
+                    gc.lowRes = true; // 降低渲染精度
+                    gc.autoDelay = false; // 禁用实时延迟矫正
+                    gc.inputOffset = "90"; // 输入延迟 90ms
+                    // 旧版本地存档（localStorage）中的用户设置优先于上述默认值
+                    return JSON.parse(localStorage.getItem("PhiTogetherSettings") || "{}");
+                })
                 .then(parsed => {
                     let upgrade = false;
                     for (const item of Object.keys(ptmain.gameConfig)) {

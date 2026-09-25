@@ -12,6 +12,7 @@ This is a **self-hostable edition** of [Team-PhiTogether/PhiTogether](https://gi
 - **Self-hosted leaderboard.** Players register on your server; best scores upload after each play (with an offline queue), and the leaderboard ranks everyone by RKS (mean of the best 30 charts). Guests can play, but their scores stay local.
 - **A minimal server is included** (`server/`, Python + FastAPI): accounts (JWT), chart packages and the leaderboard — nothing else. See [server/README.md](server/README.md).
 - **Multiplayer code is kept but disabled** (the room server it needs is not part of this edition); the entry shows a maintenance notice.
+- **Low-performance-friendly default settings.** On first launch the game applies the recommended low-performance configuration: hide inactive (distant) notes, no background/UI blur, lower render resolution, no real-time delay calibration, and a 90 ms input offset. Everything stays adjustable in Settings.
 - No analytics, no external chart/community requests.
 
 ## Self-Hosting
