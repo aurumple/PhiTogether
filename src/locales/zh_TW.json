@@ -10,15 +10,16 @@
         "no": "否",
         "ok": "好",
         "failure": "錯誤",
-        "warning": "警告"
+        "warning": "警告",
+        "delete": "刪除"
     },
     "pages": {
         "/startpage": "主頁",
         "/chartselect": "譜面選擇",
         "/playing": "遊玩",
-        "/login": "登入到 PhiZone",
+        "/login": "登入",
         "/calibrate": "延遲校准",
-        "/cachemanage": "快取管理",
+        "/cachemanage": "譜面管理",
         "/aboutpage": "關於",
         "/chartupload": "譜面上傳",
         "/chartedit": "信息編輯",
@@ -29,7 +30,9 @@
         "/multipanel": "多人遊戲面板",
         "/settings": "設定",
         "/loading": "正在加載",
-        "/multiindex": "聯機大廳"
+        "/multiindex": "聯機大廳",
+        "/chartmanage": "譜面管理",
+        "/ptleaderboard": "排行榜"
     },
     "startPage": {
         "viewB20": "查看B20",
@@ -64,7 +67,11 @@
         "recoverMPFailed": "嘗試恢復未正常退出的多人遊戲失敗，如需開啓新的多人遊戲請重新點擊多人遊戲按鈕。",
         "recoverMPNetProblem": "恢復未正常退出的多人遊戲時遇到網路錯誤，請點擊多人遊戲按鈕重試",
         "mpMaintainanceNotice": "您必須在設置中填寫聯機服務器地址以進行多人遊戲",
-        "antiAddictionIssue": "實名認證錯誤"
+        "antiAddictionIssue": "實名認證錯誤",
+        "chartManage": "譜面管理",
+        "localLeaderboard": "本地排行榜",
+        "selfHosted": "自建伺服端",
+        "lastLogin": "最後登入"
     },
     "multiIndex": {
         "join": "加入房間",
@@ -91,7 +98,7 @@
     "aboutPage": {
         "life": "自上線起已運行 {0} 天",
         "QQGuild": "QQ 頻道: PhiTogether233  Discord 伺服器: https://discord.gg/9mMBYFe9",
-        "bio": "PhiTogether 是一款玩法基於 Phigros 的 <b> 非商業性 </b> 社區音樂遊戲，集成 PhiZone",
+        "bio": "PhiTogether 是基於 Phigros 的<b>非商業</b>音遊 —— 本倉庫為可自建伺服端的獨立發行版",
         "supportUs": "如果您喜歡我們，歡迎支援我們的運營！您的支援是我們最大的動力！",
         "relationshipWithPG": "此項目與 廈門鴿游網路有限公司 沒有任何關係",
         "roles": {
@@ -106,26 +113,6 @@
         "externalLinks": "友情鏈接",
         "sponsors": "贊助者列表",
         "supportus": "赞助我们"
-    },
-    "cacheManage": {
-        "manageAll": "全部快取管理",
-        "deleteAllCharts": "删除全部譜面",
-        "forceVersionUpdate": "強制版本更新",
-        "clearAllData": "清空 PhiTogether 數據",
-        "deletedSuccessfully": "刪除成功",
-        "confirmBeforeDeleteData": "您確定要刪除檔案嗎？",
-        "confirmBeforeDelete": "您確定要刪除嗎？",
-        "delete": "刪除",
-        "allDataDeleted": "PhiTogether 已完成移除在您裝置上存儲的所有檔案，請直接關閉 PhiTogether，在您下次打開 PhiTogether 時仍會在您裝置上快取新的檔案！",
-        "separate": "孤立",
-        "cachedFileTitle": "{0}的快取檔案",
-        "deleteThisGroupOfFiles": "刪除本組",
-        "file": "檔案",
-        "type": "種類",
-        "operation": "操作",
-        "music_illustration": "音樂和曲繪",
-        "chart": "譜面",
-        "additionRes": "額外資源"
     },
     "calibrate": {
         "title": "偏移率設定",
@@ -157,9 +144,7 @@
         },
         "songSource": {
             "local": "本地譜面",
-            "favourites": "收藏譜面",
-            "pz": "&nbsp;PZ&nbsp;&nbsp;社區&nbsp;",
-            "pt": "&nbsp;PT&nbsp;&nbsp;社區&nbsp;"
+            "favourites": "收藏譜面"
         },
         "search": "搜索曲名",
         "import": "導入",
@@ -190,26 +175,33 @@
         "edit": "編輯",
         "delete": "刪除",
         "select": "選擇",
-        "rankings": "排行",
         "thisSongHasNoPlayableCharts": "該歌曲暫無可遊玩譜面！",
         "chartSelect": "譜面選擇",
-        "config": "遊玩配置"
+        "config": "遊玩配置",
+        "chartListIsEmptyOffline": "沒有可離線遊玩的快取譜面。請先到「譜面管理」下載譜面。",
+        "chartListIsEmptyFavorite": "暫無已收藏的譜面",
+        "goDownloadCharts": "去下載譜面"
     },
     "loadingPage": {
         "loadingRes": "正在加載資源"
     },
     "login": {
-        "usernameAndPasswordCantBeEmpty": "帳戶名和密碼不得為空！",
-        "loggingin": "正在登入",
-        "email": "郵箱",
-        "passwd": "密碼",
         "signin": "登入",
         "signup": "註冊",
-        "noTapTapBinding": "無法找到當前 TapTap 賬號綁定的 PhiZone 賬號，請使用 PhiZone 賬號登入",
-        "askTapTapBinding": "您要將此 PhiZone 賬號與 TapTap 賬號（{username}）綁定嗎？",
-        "bindingTapTap": "正在綁定 TapTap",
-        "bindTapTapSuccess": "綁定 TapTap 成功",
-        "bindTapTapFailure": "綁定 TapTap 失敗，請確保 PhiZone 賬號與 TapTap 賬號一對一綁定"
+        "username": "用戶名",
+        "passwd": "密碼",
+        "confirmPasswd": "確認密碼",
+        "nickname": "暱稱",
+        "nicknamePlaceholder": "可選，將顯示在排行榜上",
+        "toSignup": "沒有帳號？註冊",
+        "toSignin": "已有帳號？登入",
+        "playAsGuest": "以訪客身分遊玩",
+        "guestHint": "訪客可正常遊玩，但成績僅保存在本地，不上傳排行榜。",
+        "usernameAndPasswordCantBeEmpty": "用戶名和密碼不能為空",
+        "passwordMismatch": "兩次輸入的密碼不一致",
+        "loggingin": "正在登入...",
+        "success": "登入成功，歡迎 {userName}！",
+        "failed": "登入失敗"
     },
     "multiplayer": {
         "liveRanking": "實時排名",
@@ -346,10 +338,6 @@
             "backToSingle": "回到單人遊戲"
         }
     },
-    "playerB20": {
-        "loadB20": "正在加載數據...",
-        "error": "加載數據時遇到錯誤"
-    },
     "replayPage": {
         "toBeOptimized": "很抱歉，該功能正在處於不穩定狀態，您很可能無法正常播放遊玩回放。",
         "title": "播放遊玩回放",
@@ -416,40 +404,6 @@
         "notification": {
             "msg": "您是否同意 PhiTogether 在後台給您推送通知？（我們只使用此權限推送多人遊戲最新動態）",
             "err": "您拒絕了通知請求或您的裝置不支援後台通知，PhiTogether 將無法在後台通知您多人遊戲的最新信息。"
-        }
-    },
-    "phizone": {
-        "scoreUpload": {
-            "getToken": "正在上報 PhiZone 遊玩配置",
-            "getTokenErr": "錯誤：無法與伺服器通訊",
-            "uploading": "正在上傳成績",
-            "failed": "成績上傳失敗，是否重試？"
-        },
-        "modJudgment": {
-            "offline": "您無法在離線模式下修改判定範圍",
-            "current": "您當前的設定為：Perfect±{0} Good±{1}，您要修改嗎？",
-            "enterPJ": "請輸入新的Perfect判定範圍（±25~±100 整數 單位: ms）",
-            "enterGJ": "請輸入新的Good判定範圍（±60~±180 整數 單位: ms）",
-            "inputDosentMatchRequirement": "輸入不符合要求",
-            "error": "操作配置檔案出錯",
-            "success": "判定範圍修改成功",
-            "modifying": "修改配置檔案中..."
-        },
-        "login": {
-            "autologinFailed": "自動登入失敗，您已進入離線模式。您可以正常離線遊玩，但所有記錄將不會被儲存。若要重新上線，請嘗試重整頁面或重新登入。",
-            "updatingUserInfo": "正在更新使用者信息",
-            "success": "{userName}，歡迎登入 PhiTogether！",
-            "autologgingin": "正在自動登入到PhiZone",
-            "withPhiZone": "使用 PhiZone 帳號登入",
-            "withTapTap": "使用 TapTap 快速登錄"
-        },
-        "err": {
-            "retriveToken": {
-                "invalidPswd": "密碼錯誤",
-                "unableToFindUser": "帳戶名錯誤"
-            },
-            "unknown": "未知錯誤",
-            "network": "網絡錯誤"
         }
     },
     "respack": {
@@ -654,5 +608,71 @@
         "roomClosedMsg": "房間關閉",
         "allScoreUploadedMsg": "所有玩家已經完成分數上傳",
         "allLoadFinishMsg": "所有玩家已經完成譜面加載，遊戲可以開始"
+    },
+    "chartManage": {
+        "title": "譜面管理",
+        "subtitleLocal": "本地 {0} 首 · {1}",
+        "subtitleServer": "伺服端 {0} 個",
+        "searchPlaceholder": "搜尋譜面",
+        "refresh": "重新整理",
+        "downloadAll": "全部下載",
+        "pausedNotice": "下載已暫停（遊玩時自動暫停，退出遊玩後繼續）",
+        "downloadingNotice": "正在下載 {0} 個譜面...",
+        "serverUnreachable": "伺服端無法連線（{0}），僅顯示本地譜面",
+        "retry": "重試",
+        "loadingLocal": "正在載入本地譜面...",
+        "empty": "沒有任何譜面。可點擊「全部下載」從伺服端下載，或將 .pez/.zip 檔案放到伺服端 data/charts/ 目錄後重新整理。",
+        "unnamed": "(未命名)",
+        "unknownComposer": "未知曲師",
+        "noCharts": "無譜面",
+        "charter": "譜師 {0}",
+        "noChartFiles": "無譜面檔案（僅音訊/插圖），可整組刪除",
+        "tagDownloaded": "已下載",
+        "tagLocalUpload": "本地匯入",
+        "tagBrokenServer": "伺服端檔案損壞",
+        "tagBroken": "損壞",
+        "tagUnlinked": "已下載（未關聯）",
+        "tagQueued": "排隊中",
+        "importing": "匯入中",
+        "downloadFailed": "下載失敗",
+        "update": "更新",
+        "delete": "刪除",
+        "deleted": "已刪除",
+        "collapse": "收起",
+        "expand": "展開",
+        "download": "下載",
+        "redownload": "重新下載",
+        "confirmDeleteGroup": "刪除「{0}」的全部快取（音訊、插圖與所有難度譜面）？",
+        "confirmBeforeDelete": "您確定要刪除嗎？",
+        "loadFailed": "載入失敗",
+        "confirmClear": "確認執行該清理操作？相關資料將被刪除且無法復原。",
+        "clearOk": "已刪除全部資料",
+        "dangerTitle": "進階清理",
+        "dangerDeleteAllCharts": "刪除全部譜面",
+        "dangerForceUpdate": "強制版本更新",
+        "dangerClearAll": "清空全部資料",
+        "dangerNote": "刪除全部譜面會清空本地譜面與遊戲存檔；強制版本更新會重新拉取介面資源；清空全部資料包含設定與成績。",
+        "outdated": "伺服端檔案有更新",
+        "importInvalid": "譜面檔案無效（缺少譜面/音訊或不是有效的 zip）"
+    },
+    "ptLeaderboard": {
+        "title": "本地排行榜",
+        "tabRank": "全站排名",
+        "tabBest": "我的 Best30",
+        "refresh": "重新整理",
+        "back": "返回",
+        "loading": "載入中...",
+        "failed": "無法連線伺服端，請檢查網路後重新整理",
+        "myRank": "我的排名",
+        "notRanked": "未上榜",
+        "empty": "還沒有任何成績，去打一首歌吧",
+        "colPlayer": "玩家",
+        "colPlays": "成績數",
+        "myRks": "我的 RKS",
+        "best30Hint": "Best30 均值",
+        "noRecords": "暫無成績記錄",
+        "colSong": "曲目",
+        "colChartRks": "單曲RKS",
+        "colScoreAcc": "分數 / 準度"
     }
 }

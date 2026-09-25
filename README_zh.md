@@ -1,24 +1,41 @@
-# PhiTogether
+# PhiTogether — 自建服务端版
 
 [English](README.md) | 中文
 
-[iOS 应用](https://testflight.apple.com/join/PvFpBSft)
+将多人游戏与 Phigros 玩法结合起来！一个基于 Phigros 玩法的非盈利性开源音游。
 
-[服务状态](https://status.phitogether.fun)
+本仓库是 [Team-PhiTogether/PhiTogether](https://github.com/Team-PhiTogether/PhiTogether) 的**可自建发行版**：谱面不再从网络谱面社区（PhiZone / PT社区）获取，而是全部来自**你自己的服务端**；排行榜也是服务端上的**本地排行榜**。
 
-将多人游戏与Phigros玩法结合起来！一个基于Phigros玩法的非盈利性开源社区游戏。集成PhiZone。
+## 与上游的差异
 
-## 👍 支持我们的持续运行
+- **谱面统一从服务端获取**：移除 PhiZone、PT社区等联网谱面源。把 `.pez` / `.zip` 谱面包放进服务端 `data/charts/` 目录，玩家在游戏内「谱面管理」按需下载。本地导入与内置活动谱面保留。
+- **自建排行榜**：玩家在你的服务端注册；每局结束自动上传最佳成绩（离线自动补传），按 RKS（Best30 均值）排名。游客可玩，但成绩只存本地。
+- **附带精简服务端**（`server/`，Python + FastAPI）：账号（JWT）、谱面包、排行榜，仅此而已。详见 [server/README.md](server/README.md)。
+- **多人联机代码保留但禁用**（其依赖的房间服务器不在本发行版内），入口显示维护中。
+- 无埋点、不请求任何外部谱面/社区服务。
 
-[Team PhiTogether 的爱发电](https://afdian.com/a/PhiTogether)
+## 自建部署
 
-## 💪 贡献此项目
+要求：Python 3.11+、Node.js 18+、pnpm。
 
-如有 bug 或功能提议，请[发布 issue](https://github.com/Team-PhiTogether/PhiTogether/issues/new)。
+```bash
+# 1. 安装前端依赖并构建
+pnpm install
+pnpm build               # 产物在 dist/
 
-若想要贡献代码，请 Fork 本项目并在修改完成后发出 Pull Request 并等候合并。
+# 2. 启动服务端
+cd server
+python -m venv .venv && .venv/bin/pip install -r requirements.txt   # Windows: .venv\Scripts\pip
+python main.py           # 同时提供 API 与构建好的前端，http://127.0.0.1:8000
+```
 
-在这里预览 PhiTogether 未正式发布的最新版本: [PhiTogether-latest.realtvop.top](https://PhiTogether-latest.realtvop.top/)
+打开 `http://<主机>:8000`，注册账号（首个注册用户为管理员）即可开始游玩。
+
+**添加谱面**：把 `.pez` / `.zip` 谱面包放入 `server/data/charts/`，在游戏内「谱面管理」点「刷新」。损坏的谱面包会被标红并禁止下载。
+
+开发模式：`pnpm dev`（前端 :1145）+ `python server/main.py` 同时跑，dev 服务器会把 `/api` 代理到 :8000。
+
+更多服务端配置（数据目录、JWT 密钥、监听地址）见 [server/README.md](server/README.md)。
 
 ## 📃 许可证 LICENSE
 
@@ -64,6 +81,6 @@
 
 ## ⭐ 致谢
 
+- 上游项目：[Team-PhiTogether/PhiTogether](https://github.com/Team-PhiTogether/PhiTogether)。
 - 基于 [lchzh3473/sim-phi](https://github.com/lchzh3473/sim-phi) 。
-- 所有[以爱发电等各种形式支持我们](https://afdian.com/a/PhiTogether?tab=sponsor)的玩家。
 - 以及屏幕前的你！

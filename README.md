@@ -1,24 +1,41 @@
-# PhiTogether
+# PhiTogether — Self-Hosted Edition
 
 [中文](README_zh.md) | English
 
-[iOS App](https://testflight.apple.com/join/PvFpBSft)
+Bringing multiplayer to Phigros gameplay! An open-source, non-commercial rhythm game based on Phigros.
 
-[Status Page](https://status.phitogether.fun)
+This is a **self-hostable edition** of [Team-PhiTogether/PhiTogether](https://github.com/Team-PhiTogether/PhiTogether): instead of fetching charts from online chart communities (PhiZone / PT Community), every chart comes from **your own server**, and the leaderboard is a **local leaderboard** on that server.
 
-Bringing multiplayer to Phigros gameplay! An open-source, non-commercial & community-based rhythm game with PhiZone intergrated.
+## What changed compared to upstream
 
-## 👍 Support Our Continuous Operation
+- **Charts come from the server only.** The PhiZone and PT-Community chart sources are removed. You drop `.pez` / `.zip` chart packages into the server's `data/charts/` directory and players download them in-game via *Chart Management*. Local chart import and the bundled event charts still work.
+- **Self-hosted leaderboard.** Players register on your server; best scores upload after each play (with an offline queue), and the leaderboard ranks everyone by RKS (mean of the best 30 charts). Guests can play, but their scores stay local.
+- **A minimal server is included** (`server/`, Python + FastAPI): accounts (JWT), chart packages and the leaderboard — nothing else. See [server/README.md](server/README.md).
+- **Multiplayer code is kept but disabled** (the room server it needs is not part of this edition); the entry shows a maintenance notice.
+- No analytics, no external chart/community requests.
 
-[Team PhiTogether on Afdian](https://afdian.com/a/PhiTogether)
+## Self-Hosting
 
-## 💪 Contributing to This Project
+Requirements: Python 3.11+, Node.js 18+, pnpm.
 
-For bugs or feature suggestions, please [create an issue](https://github.com/Team-PhiTogether/PhiTogether/issues/new).
+```bash
+# 1. Install the frontend dependencies and build the client
+pnpm install
+pnpm build               # output in dist/
 
-If you want to contribute code, please Fork this project, make your changes, and submit a Pull Request, then wait for merge.
+# 2. Set up the server
+cd server
+python -m venv .venv && .venv/bin/pip install -r requirements.txt   # Windows: .venv\Scripts\pip
+python main.py           # serves the API and the built client on http://127.0.0.1:8000
+```
 
-Preview the latest unreleased version of PhiTogether here: [PhiTogether-latest.realtvop.top](https://PhiTogether-latest.realtvop.top/)
+Then open `http://<host>:8000`, register (the first account becomes the admin) and start playing.
+
+**Adding charts:** put `.pez` / `.zip` chart packages into `server/data/charts/` and hit *Refresh* on the in-game *Chart Management* page. Corrupt packages are flagged and can't be downloaded.
+
+For development, run `pnpm dev` (client on :1145) alongside `python server/main.py` — the dev server proxies `/api` to `:8000`.
+
+More server options (data directory, JWT secret, bind address): see [server/README.md](server/README.md).
 
 ## 📃 LICENSE
 
@@ -34,6 +51,6 @@ For multimedia resources, we reserve all rights.
 
 ## ⭐ Acknowledgments
 
+- Upstream project: [Team-PhiTogether/PhiTogether](https://github.com/Team-PhiTogether/PhiTogether).
 - Based on [lchzh3473/sim-phi](https://github.com/lchzh3473/sim-phi).
-- All players who [support us through Afdian and other means](https://afdian.com/a/PhiTogether?tab=sponsor).
 - And you in front of the screen!
