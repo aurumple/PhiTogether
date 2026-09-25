@@ -12,7 +12,9 @@ import multiplayerinst from "@components/multiplayer.vue";
 import { uploader } from "@renderers/sim-phi/assetsProcessor/reader";
 import shared from "@utils/js/shared.js";
 import i18n from "@locales";
-import { PhiZoneAPI as phizoneApi, getUserColor } from "@community/phizone";
+import { ptServer } from "@utils/ptServer";
+import * as serverApi from "@utils/serverApi";
+import { chartDownloadQueue } from "@utils/chartDownloadQueue";
 import ploading from "@utils/js/ploading.js";
 import { full } from "@utils/js/common.js";
 import { tipsHandler } from "@components/tips";
@@ -28,6 +30,28 @@ document.oncontextmenu = e => e.preventDefault();
 import { renderers } from "@components/renderer";
 
 var searchParams;
+
+// 顶部玩家条头像描边色：按用户名哈希取色（原 PhiZone 角色色板的本地替代）
+const getUserColor = name => {
+    const palette = ["#66bbff", "#7dd3a0", "#f2b134", "#e06666", "#b088f9", "#f28ab2"];
+    let h = 0;
+    const s = String(name || "");
+    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+    return palette[h % palette.length];
+};
+
+// gameConfig 落盘防抖：挂载流程（填充玩家信息等）会触发深度 watcher，
+// 若立即保存会在恢复存档前用默认值覆盖 IndexedDB 里的用户设置
+// （「每次重进设置都被重置」的根因）。恢复完成前不落盘，之后 500ms 防抖保存。
+let configRestored = false;
+let configSaveTimer = null;
+const queueConfigSave = () => {
+    if (configSaveTimer) clearTimeout(configSaveTimer);
+    configSaveTimer = setTimeout(() => {
+        configSaveTimer = null;
+        if (configRestored) ptdb.gameConfig.save(ptmain.gameConfig);
+    }, 500);
+};
 
 ploading.init({
     whenShow: () => {
@@ -117,6 +141,9 @@ router.beforeEach((to, from) => {
             shared.game.multiInstance.panelOpen = true;
             break;
         case "/playing":
+            // 游玩时暂停谱面下载队列，避免下载占用网络/IO 影响游玩；
+            // 离开游玩页（结算返回等）自动恢复。
+            chartDownloadQueue.pause();
             shared.game.bubbleAnimator.stop();
             document.getElementById("backgroundCanvas").style.display = "none";
             document.querySelector(".background").style.display = "none";
@@ -164,6 +191,7 @@ router.beforeEach((to, from) => {
             shared.game.multiInstance.panelOpen = false;
             break;
         case "/playing":
+            chartDownloadQueue.resume();
             document.getElementById("backgroundCanvas").style.display = "block";
             document.querySelector(".background").style.display = "block";
             shared.game.bubbleAnimator.start();
@@ -224,9 +252,7 @@ const ptAppInstance = createApp({
                 account: {
                     tokenInfo: null,
                     userBasicInfo: null,
-                    defaultConfigID: null,
                     defaultConfig: null,
-                    pzBestRecords: {},
                 },
                 ptBestRecords: {},
                 showPoint: false,
@@ -260,7 +286,6 @@ const ptAppInstance = createApp({
                 autoDelay: true,
                 usekwlevelOverbgm: false,
                 resourcesType: "together-pack-1",
-                customChartServer: "ptc.realtvop.top",
                 prprRespackID: "",
                 enableFilter: false,
                 enableLife: true,
@@ -304,6 +329,22 @@ const ptAppInstance = createApp({
               }`;
 
         this.$i18n.locale = this.localeValue;
+        // 自建服务端模式：用已登录账号填充玩家信息（rks 由本地排行榜接口回填），
+        // 使 startpage 玩家卡与回放记录使用真实昵称。
+        const srvName = ptServer.playerName();
+        if (srvName && this.noAccountMode && !this.gameConfig.account.userBasicInfo) {
+            this.gameConfig.account.userBasicInfo = {
+                userName: srvName,
+                id: "server-local",
+                role: "player",
+                experience: 0,
+                rks: 0,
+                avatar: null,
+                dateLastLoggedIn: Date.now(),
+                isPTDeveloper: false,
+            };
+        }
+        if (srvName) recordMgr.playerInfo.username = srvName;
     },
     computed: {
         aspectRatioComputed() {
@@ -346,13 +387,10 @@ const ptAppInstance = createApp({
                 replayMgr.replaying
             );
         },
-        shouldNotUploadPhiZone() {
-            return this.noAccountMode || this.shouldNotSaveScore;
-        },
         userColor() {
             return getUserColor(
                 this.gameConfig.account.userBasicInfo
-                    ? this.gameConfig.account.userBasicInfo.role
+                    ? this.gameConfig.account.userBasicInfo.userName
                     : null
             );
         },
@@ -360,8 +398,7 @@ const ptAppInstance = createApp({
     watch: {
         gameConfig: {
             handler(newVal, oldVal) {
-                // localStorage.setItem("PhiTogetherSettings", JSON.stringify(newVal));
-                ptdb.gameConfig.save(newVal);
+                queueConfigSave();
 
                 if (newVal.noUIBlur === ploading.useBlur) {
                     if (newVal.noUIBlur) document.body.classList.add("noUIBlur");
@@ -513,104 +550,11 @@ const ptAppInstance = createApp({
         ptAppPause(i) {
             hook.playController.pause();
         },
-        async modJudgment() {
-            try {
-                if (this.noAccountMode) {
-                    msgHandler.failure(this.$t("phizone.modJudgment.offline"));
-                    return;
-                }
-                const current = this.gameConfig.account.defaultConfig;
-                if (
-                    await msgHandler.confirm(
-                        this.$t("phizone.modJudgment.current", [
-                            current.perfectJudgment,
-                            current.goodJudgment,
-                        ]),
-                        this.$t("info.info"),
-                        this.$t("info.mod"),
-                        this.$t("info.cancel")
-                    )
-                ) {
-                    setTimeout(async () => {
-                        const res1 = parseInt(
-                            await msgHandler.prompt(this.$t("phizone.modJudgment.enterPJ"))
-                        );
-                        if (isNaN(res1) || !(res1 >= 25 && res1 <= 100)) {
-                            msgHandler.sendMessage(
-                                this.$t("phizone.modJudgment.inputDosentMatchRequirement"),
-                                "error"
-                            );
-                            return;
-                        }
-                        setTimeout(async () => {
-                            const res2 = parseInt(
-                                await msgHandler.prompt(this.$t("phizone.modJudgment.enterGJ"))
-                            );
-                            if (isNaN(res2) || !(res2 > res1 && res2 >= 60 && res2 <= 180)) {
-                                msgHandler.sendMessage(
-                                    this.$t("phizone.modJudgment.inputDosentMatchRequirement"),
-                                    "error"
-                                );
-                                return;
-                            }
-                            try {
-                                ploading.l(this.$t("phizone.modJudgment.modifying"), "modJudgment");
-                                await phizoneApi.patchSpecConfiguration(
-                                    this.gameConfig.account.tokenInfo.access_token,
-                                    this.gameConfig.account.defaultConfigID,
-                                    {
-                                        perfectJudgment: res1,
-                                        goodJudgment: res2,
-                                    }
-                                );
-                                msgHandler.sendMessage(this.$t("phizone.modJudgment.success"));
-                            } catch {
-                                msgHandler.sendMessage(
-                                    this.$t("phizone.modJudgment.error"),
-                                    "error"
-                                );
-                            } finally {
-                                ploading.r("modJudgment");
-                            }
-                        }, 500);
-                    }, 500);
-                }
-            } catch {
-                msgHandler.sendMessage(this.$t("phizone.modJudgment.error"), "error");
-                ploading.r("modJudgment");
-            }
-        },
-        async genPlayToken() {
-            try {
-                const chartData = JSON.parse(sessionStorage.getItem("loadedChart"));
-                const playInfo = JSON.parse(sessionStorage.getItem("pzPlayInfo"));
-                if (chartData.isFromPhiZone && (!playInfo || playInfo.for !== chartData.id)) {
-                    ploading.l(this.$t("phizone.scoreUpload.getToken"), "playChart", true, true);
-                    const resp = await phizoneApi.playChart(
-                        this.gameConfig.account.tokenInfo.access_token,
-                        chartData.id,
-                        this.gameConfig.account.defaultConfigID
-                    );
-                    const res = await resp.json();
-                    res.data.for = chartData.id;
-                    sessionStorage.setItem("pzPlayInfo", JSON.stringify(res.data));
-                }
-                ploading.r("playChart");
-            } catch (e) {
-                ploading.r("playChart");
-                shared.game.msgHandler.failure(this.$t("phizone.scoreUpload.getTokenErr"));
-                return;
-            }
-        },
         async retry() {
-            await this.genPlayToken();
             recordMgr.reset();
             shared.game.restartClearRecord();
         },
         async playChart(settings) {
-            if (this.gameMode !== "multi" && !this.shouldNotUploadPhiZone)
-                await this.genPlayToken();
-
             if (settings) this.playConfig = JSON.parse(JSON.stringify(settings));
             this.$router.push({ path: "/playing", query: { auto: 1 } });
             if (shared.game.restartClearRecord) shared.game.restartClearRecord();
@@ -618,112 +562,16 @@ const ptAppInstance = createApp({
         async playFinished() {
             if (
                 replayMgr.replaying ||
-                (shared.game.multiInstance.room.compete_mode && shared.game.multiInstance.owner)
+                (shared.game.multiInstance?.room?.compete_mode && shared.game.multiInstance.owner)
             ) {
-                scoreLoadingAndResultData.display = false;
                 return;
             }
             shared.game.finishToRecord && shared.game.finishToRecord();
             const chartData = JSON.parse(sessionStorage.getItem("loadedChart"));
-            // const shouldNotUploadPhiZone = this.noAccountMode || typeof chartData.id !== 'number' || this.gameConfig.autoplay || shared.game.app.speed != 1 || this.gameConfig.fullScreenJudge;
             const isMulti = shared.game.ptmain.gameMode === "multi";
-            const uploadPhizone = () => {
-                return new Promise(async (res, rej) => {
-                    scoreLoadingAndResultData.display = false;
-
-                    if (
-                        chartData &&
-                        chartData.id &&
-                        chartData.id == "c9e42da0-2149-4037-98be-e50070be9ad6"
-                    ) {
-                        res(true);
-                        return; // 水渍 特判
-                    }
-                    if (this.shouldNotUploadPhiZone || !chartData.isFromPhiZone) {
-                        res(true);
-                        return;
-                    }
-                    if (!sessionStorage.getItem("pzPlayInfo")) {
-                        res(true);
-                        return;
-                    }
-
-                    const stdDeviation = recordMgr.stdDeviation;
-
-                    if (isNaN(stdDeviation) || stdDeviation === "NaN") {
-                        res(true);
-                        return;
-                    }
-
-                    scoreLoadingAndResultData.display = true;
-                    scoreLoadingAndResultData.text = this.$t("phizone.scoreUpload.uploading");
-                    scoreLoadingAndResultData.startTime = null;
-                    scoreLoadingAndResultData.loaded = 0;
-
-                    const stat = shared.game.stat;
-                    const pzStat = {
-                        chart: chartData.id,
-                        max_combo: stat.maxcombo,
-                        perfect: stat.noteRank[4] + stat.noteRank[5] + stat.noteRank[1],
-                        good_early: stat.noteRank[7],
-                        good_late: stat.noteRank[3],
-                        bad: stat.noteRank[6],
-                        miss: stat.noteRank[2],
-                        stdDeviation,
-                    };
-                    phizoneApi
-                        .recordEncrypted(pzStat, this.gameConfig.account)
-                        .then(e => {
-                            this.gameConfig.account.userBasicInfo.rks = e.player.rks;
-                            this.gameConfig.account.userBasicInfo.experience = e.player.experience;
-                            scoreLoadingAndResultData.text = `EXP+${e.experienceDelta} RKS+${(
-                                e.player.rks - e.rksBefore
-                            ).toFixed(3)}`;
-                            scoreLoadingAndResultData.data = {
-                                name: this.gameConfig.account.userBasicInfo.userName,
-                                rks: e.player.rks.toFixed(3),
-                                exp:
-                                    this.gameConfig.account.userBasicInfo.experience +
-                                    e.experienceDelta,
-                            };
-                            scoreLoadingAndResultData.loaded = 1;
-                            sessionStorage.removeItem("pzPlayInfo");
-                            // nmm 这玩意有bug 个🐔8
-                            phizoneApi
-                                .getUserBestRecords(
-                                    this.gameConfig.account.tokenInfo.access_token,
-                                    e.player.id
-                                )
-                                .then(async e => {
-                                    try {
-                                        this.gameConfig.account.pzBestRecords = e;
-                                        res(true);
-                                    } catch {
-                                        rej(false);
-                                    }
-                                });
-                            res(true);
-                        })
-                        .catch(async e => {
-                            ploading.r("uploadScore");
-                            if (
-                                !(await msgHandler.confirm(
-                                    this.$t("phizone.scoreUpload.failed"),
-                                    this.$t("info.error")
-                                ))
-                            ) {
-                                res(true);
-                                scoreLoadingAndResultData.display = false;
-                                return;
-                            }
-                            await uploadPhizone();
-                            res(true);
-                        });
-                });
-            };
             const savePTCRLocally = () => {
                 return new Promise(async res => {
-                    if (this.shouldNotSaveScore || chartData.isFromPhiZone) {
+                    if (this.shouldNotSaveScore) {
                         res(true);
                         return;
                     }
@@ -749,56 +597,36 @@ const ptAppInstance = createApp({
 
                         this.gameConfig.ptBestRecords[ptStat.chart] = toCompare;
 
+                        // 自建排行榜：合并后的最佳成绩入队上传（离线保留在 IndexedDB，
+                        // 联网后由 online 事件/下次游玩/重新进入游戏重试）。
+                        // 上传成功后拉取最新 rks 写回玩家信息条（顶栏 pzrks）。
+                        try {
+                            const songInfo = JSON.parse(
+                                sessionStorage.getItem("chartDetailsData") || "{}"
+                            );
+                            ptServer.queueRecord({
+                                chart_id: String(ptStat.chart),
+                                song_name: String(songInfo.name || ""),
+                                difficulty: String(chartData.level || ""),
+                                rating: Number(chartData.difficulty) || 0,
+                                score: Number(toCompare[0]) || 0,
+                                // stat.accNum 是 0-1 刻度（见 sim-phi Stat.ts），服务端按百分比存
+                                acc: (Number(toCompare[1]) || 0) * 100,
+                                is_fc: !!toCompare[2],
+                            }).then(ok => {
+                                if (ok) ptServer.refreshLocalPlayerRks();
+                            });
+                        } catch (e) {
+                            /* 本地成绩已保存，上报失败不影响游戏 */
+                        }
+
                         res(true);
                     } catch (e) {
                         res(false);
                     }
                 });
             };
-            // const autoUpload = async () => {
-            //   const stat = shared.game.stat;
-            //   const ptStat = {
-            //     chart: chartData.id,
-            //     score: stat.scoreNum.toFixed(0),
-            //     acc: stat.accNum,
-            //     isFC: stat.lineStatus == 3,
-            //   };
-            //   recordMgr.chartInfo.playScore = [ptStat.score, ptStat.acc, ptStat.isFC];
-            //   const [data, original] = recordMgr.export();
-            //   const formData = new FormData();
-            //   formData.append("text", data);
-            //   formData.append(
-            //     "filename",
-            //     encodeURI(
-            //       `AutoUpload_${original.chartInfo.songData.name}${
-            //         original.chartInfo.chartData.level
-            //       }${original.chartInfo.chartData.difficulty}-${
-            //         original.playerInfo.userName
-            //       }-${new Date().format("YmdHis")}.ptr`
-            //     )
-            //   );
-            //   fetch("/record/upload", {
-            //     method: "POST",
-            //     body: formData,
-            //   })
-            //     .then(r => r.json())
-            //     .then(j => {
-            //       if (!j.ce) {
-            //         const formData = new FormData();
-            //         const meta = JSON.parse(sessionStorage.getItem("chartDetailsData"));
-            //         meta.chart = JSON.parse(sessionStorage.getItem("loadedChart"));
-            //         formData.append("m", JSON.stringify(meta));
-            //         self.hook.chartData.oriBuffers.forEach((v, k) => formData.append("f", new Blob([v]), k));
-            //         fetch("/record/ctupload", {
-            //           method: "POST",
-            //           body: formData,
-            //         })
-            //       }
-            //     });
-            // };
-            await uploadPhizone();
             await savePTCRLocally();
-            // await autoUpload();
             if (isMulti) {
                 shared.game.multiInstance.uploadScore();
             }
@@ -813,10 +641,16 @@ const ptAppInstance = createApp({
                 .then(parsed => {
                     let upgrade = false;
                     for (const item of Object.keys(ptmain.gameConfig)) {
+                        // 自建服务端模式：跳过 account 快照恢复——旧快照会覆盖挂载时
+                        // 填充的玩家信息（含已同步的最新 rks）。本地最佳成绩在顶层
+                        // ptBestRecords（不受影响）。
+                        if (item === "account" && ptServer.available()) continue;
                         if (item in parsed) ptmain.gameConfig[item] = parsed[item];
                         else upgrade = true;
                     }
                     if (upgrade) ptdb.gameConfig.save(ptmain.gameConfig);
+                    // 恢复完成：此后 gameConfig 变更才允许落盘（见 queueConfigSave）
+                    configRestored = true;
 
                     for (const item of Object.keys(ptmain.gameConfig)) {
                         const val = ptmain.gameConfig[item];
@@ -931,10 +765,8 @@ const ptAppInstance = createApp({
 
             setTimeout(requestLandscape, 500);
 
-            const account = this.gameConfig.account;
-            if (account.tokenInfo && account.userBasicInfo) {
-                this.pzRefreshLogin();
-            }
+            // 自建服务端会话恢复：刷新 token 并同步 rks / 离线成绩队列
+            this.restoreServerSession();
 
             shared.game.loaded();
 
@@ -966,26 +798,7 @@ const ptAppInstance = createApp({
 
             try {
                 let chartData;
-                if (searchParams.get("type") === "pz") {
-                    chartData = await phizoneApi.getChartAndItsSongAsv1(searchParams.get("chart"));
-
-                    shared.game.judgeManager.setJudgeTime();
-                    const pzpi = {
-                        token: searchParams.get("token"),
-                        for: searchParams.get("chart"),
-                        timestamp: searchParams.get("timestamp"),
-                    };
-                    sessionStorage.setItem("pzPlayInfo", JSON.stringify(pzpi));
-                    const config = await phizoneApi.getSpecConfiguration(
-                        "",
-                        searchParams.get("configuration")
-                    );
-                    shared.game.judgeManager.setJudgeTime(
-                        config.perfectJudgment / 1000,
-                        config.goodJudgment / 1000,
-                        config.perfectJudgment / 2000
-                    );
-                } else if (searchParams.get("type") === "custom") {
+                if (searchParams.get("type") === "custom") {
                     chartData = {
                         id: searchParams.get("name"),
                         // song: searchParams.get("name"),
@@ -1103,41 +916,43 @@ const ptAppInstance = createApp({
                     });
                 });
             } catch (err) {
-                msgHandler.sendMessage(this.$t("loadChart.failedFromPZRedirect"), "error");
+                msgHandler.sendMessage(this.$t("loadChart.failed"), "error");
                 console.error(err);
                 ploading.r("loadChartfr");
             }
         },
-        async pzRefreshLogin() {
-            const account = this.gameConfig.account;
-            if (account.userBasicInfo.username) {
-                // 本地数据还是PZ v1
-                return (this.gameConfig.account = {
-                    tokenInfo: null,
-                    userBasicInfo: null,
-                    defaultConfigID: null,
-                    defaultConfig: null,
-                    pzBestRecords: {},
-                    ptBestRecords: {},
-                });
-            }
-            // ploading.l("正在自动登录到PhiZone", "login");
-            msgHandler.sendMessage(this.$t("phizone.login.autologgingin"), "info");
-            phizoneApi
-                .refreshLogin(
-                    account.tokenInfo.refresh_token,
-                    "refresh_token",
-                    account.userBasicInfo.userName
-                )
-                .then(async e => {
-                    account.tokenInfo = e;
-                    await this.loadUserRelatedInfo(e.access_token);
-                })
-                .catch(async e => {
-                    // ploading.r("login");
-                    msgHandler.sendMessage(this.$t("phizone.login.autologinFailed"), "error");
-                    recordMgr.reset(this.gameConfig.account.userBasicInfo);
-                });
+        async restoreServerSession() {
+            // 自建服务端会话恢复：刷新 token 并重新拉取 /me。离线时保留本地会话信息
+            // （下次联网重试），未登录则保持游客模式。
+            const user = await serverApi.restoreSession();
+            if (user) this.applyServerUser(user);
+            else if (serverApi.currentUser()) this.applyServerUser(serverApi.currentUser());
+        },
+        applyServerUser(user) {
+            if (!user) return;
+            this.noAccountMode = false;
+            this.gameConfig.account.userBasicInfo = {
+                userName: user.nickname || user.username,
+                id: user.id,
+                role: user.is_admin ? "admin" : "player",
+                experience: 0,
+                rks: 0,
+                avatar: null,
+                dateLastLoggedIn: Date.now(),
+                isPTDeveloper: false,
+            };
+            recordMgr.reset(this.gameConfig.account.userBasicInfo);
+            ptServer.refreshLocalPlayerRks();
+            ptServer.flushPending();
+        },
+        serverLogout() {
+            serverApi.logout();
+            this.gameConfig.account = {
+                tokenInfo: null,
+                userBasicInfo: null,
+                defaultConfig: null,
+            };
+            this.noAccountMode = true;
         },
         update() {
             caches.delete("PTv0-Main").then(() => {
@@ -1154,59 +969,6 @@ const ptAppInstance = createApp({
                     window.location.href = url;
                     window.location.reload();
                 });
-            });
-        },
-        loadUserRelatedInfo(access_token) {
-            // ploading.l("正在更新用户信息", "login");
-            msgHandler.sendMessage(this.$t("phizone.login.updatingUserInfo"), "info");
-            return new Promise((res, rej) => {
-                const account = this.gameConfig.account;
-                phizoneApi
-                    .getUserBasicInfo(access_token)
-                    .then(async e => {
-                        account.userBasicInfo = e;
-
-                        recordMgr.reset(e);
-                        phizoneApi.getUserConfigurations(access_token).then(async e => {
-                            try {
-                                this.noAccountMode = false;
-                                if (!account.defaultConfigID)
-                                    (account.defaultConfigID = e[0].id),
-                                        (account.defaultConfig = e[0]);
-                                else {
-                                    const idx = e.findIndex(f => f.id == account.defaultConfigID);
-                                    if (idx == -1)
-                                        (account.defaultConfigID = e[0].id),
-                                            (account.defaultConfig = e[0]);
-                                    else account.defaultConfig = e[idx];
-                                }
-                                msgHandler.sendMessage(
-                                    this.$t("phizone.login.success", {
-                                        userName: account.userBasicInfo.userName,
-                                    }),
-                                    "success",
-                                    true
-                                );
-                                res(true);
-                            } catch {
-                                rej(false);
-                            } finally {
-                                // ploading.r("login");
-                            }
-                        });
-                        phizoneApi.getUserBestRecords(access_token, e.id).then(async e => {
-                            try {
-                                account.pzBestRecords = e;
-                                res(true);
-                            } catch {
-                                rej(false);
-                            }
-                        });
-                    })
-                    .catch(e => {
-                        ploading.r("login");
-                        rej(false);
-                    });
             });
         },
         cleanStr(i) {
@@ -1365,75 +1127,6 @@ const graphicHandler = {
     },
 };
 
-let scoreLoadingAndResultData = {
-    text: i18n.global.t("phizone.scoreUpload.uploading"),
-    loaded: 0,
-    startTime: null,
-    display: false,
-    data: null,
-};
-
-function drawRoundRect(ctx, x, y, w, h, r) {
-    if (w < 2 * r) {
-        r = w / 2;
-    }
-    if (h < 2 * r) {
-        r = h / 2;
-    }
-    ctx.beginPath();
-    ctx.moveTo(x + r, y);
-    ctx.arcTo(x + w, y, x + w, y + h, r);
-    ctx.arcTo(x + w, y + h, x, y + h, r);
-    ctx.arcTo(x, y + h, x, y, r);
-    ctx.arcTo(x, y, x + w, y, r);
-    ctx.closePath();
-    return ctx;
-}
-
-graphicHandler.register("resultHook", function (ctx, ctxos) {
-    if (!scoreLoadingAndResultData.display) return;
-
-    if (!scoreLoadingAndResultData.startTime) {
-        scoreLoadingAndResultData.startTime = performance.now();
-    }
-    (ctxos.shadowBlur = 20), (ctxos.shadowColor = "#000000");
-
-    const now = performance.now();
-
-    let text = scoreLoadingAndResultData.text;
-    let tmp = (now - scoreLoadingAndResultData.startTime) % 2000;
-    const cond1 = now < scoreLoadingAndResultData.loaded;
-    if (scoreLoadingAndResultData.loaded === 1) {
-        scoreLoadingAndResultData.loaded = now + 2000 - tmp;
-        if (tmp > 1000) tmp = 2000 - tmp;
-        text = i18n.global.t("phizone.scoreUpload.uploading");
-    } else if (scoreLoadingAndResultData.loaded === 0 || cond1) {
-        if (tmp > 1000) tmp = 2000 - tmp;
-        if (cond1) text = i18n.global.t("phizone.scoreUpload.uploading");
-    } else {
-        tmp = now - scoreLoadingAndResultData.loaded;
-        if (tmp > 1000) tmp = 1000;
-    }
-
-    const mt = ctxos.measureText(text);
-
-    let spec = {
-        length: mt.width + 350,
-        baseY: 975,
-    };
-
-    drawRoundRect(ctxos, 960 - spec.length / 2, spec.baseY - 40, spec.length, 80, 30);
-    ctxos.fillStyle = "#000000";
-    ctxos.globalAlpha = (tmp / 1000) * 0.5;
-    ctxos.fill();
-
-    ctxos.fillStyle = "#fff";
-    ctxos.textAlign = "center";
-    ctxos.font = "35px Saira";
-    ctxos.globalAlpha = tmp / 1000;
-    ctxos.fillText(text, 960, spec.baseY + 5);
-});
-
 ptAppInstance.use(router);
 ptAppInstance.use(i18n);
 
@@ -1447,6 +1140,15 @@ document.getElementById("app").style.display = "block";
 
 //全局暴露
 shared.game.ptmain = ptmain;
+// 会话就绪后统一同步一次 rks 并清空待上传成绩（挂载早期的写回会被守卫跳过）
+if (ptServer.available()) {
+    ptServer.refreshLocalPlayerRks();
+    ptServer.flushPending();
+}
+// 离线成绩同步：网络恢复时清空待上传队列
+window.addEventListener("online", () => {
+    if (ptServer.available()) ptServer.flushPending();
+});
 shared.game.msgHandler = msgHandler;
 shared.game.graphicHandler = graphicHandler;
 shared.game.recordMgr = recordMgr;

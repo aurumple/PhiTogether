@@ -16,11 +16,10 @@
         <link rel="stylesheet" href="/src/components/background/background.css" />
         <meta
             name="description"
-            content="PhiTogether: 将多人游戏与Phigros玩法结合起来！集成PhiZone且拥有自有社区谱面。Bringing multiplayer to Phigros gameplay! An rhythm game with PhiZone intergrated and its own chart library."
+            content="PhiTogether: 将多人游戏与Phigros玩法结合起来！可自建服务端的独立发行版。Bringing multiplayer to Phigros gameplay! A self-hostable edition with its own chart library."
         />
-        <meta name="keyword" content="PhiTogether, PhiZone" />
+        <meta name="keyword" content="PhiTogether, Phigros" />
         <meta name="author" content="Team PhiTogether" />
-        <script src="/src/utils/js/wasm_exec.js" type="module"></script>
         <script>
             function setBgScale() {
                 document.getElementsByClassName("background").width =
@@ -53,7 +52,6 @@
             import packageConfig from "./package.json";
             document.title += ` ${(window.spec.thisVersion = packageConfig.version)}`;
         </script>
-        <script src="https://www.googletagmanager.com/gtag/js?id=G-NVFVE35LMW"></script>
         <script defer src="/src/global.js" type="module"></script>
         <script
             defer
@@ -62,16 +60,6 @@
         ></script>
         <script defer src="/src/components/background/index.js" type="module"></script>
         <link rel="apple-touch-icon" href="/src/core/lg512y512.png" />
-        <script>
-            if (window.gtagLoaded) {
-                window.dataLayer = window.dataLayer || [];
-                function gtag() {
-                    dataLayer.push(arguments);
-                }
-                gtag("js", new Date());
-                gtag("config", "G-NVFVE35LMW");
-            }
-        </script>
         <script defer>
             setTimeout(() => {
                 window.scrollTo({ top: 0 });
@@ -157,18 +145,6 @@
                                             RKS {{ gameConfig.account.userBasicInfo ?
                                             gameConfig.account.userBasicInfo.rks.toFixed(3) : "----"
                                             }}
-                                        </span>
-                                        <span
-                                            style="
-                                                font-size: 50%;
-                                                white-space: nowrap;
-                                                margin-top: -30px;
-                                            "
-                                            id="pzexp"
-                                        >
-                                            EXP {{ gameConfig.account.userBasicInfo ?
-                                            Math.floor(gameConfig.account.userBasicInfo.experience)
-                                            : "----" }}
                                         </span>
                                     </div>
                                 </div>
@@ -894,13 +870,6 @@
                                     <div style="margin: auto">
                                         <input
                                             type="button"
-                                            @click="modJudgment()"
-                                            :value='$t("settings.settings.experimental.adjustJudgmentRangeButton")'
-                                        />
-                                    </div>
-                                    <div style="margin: auto">
-                                        <input
-                                            type="button"
                                             @click="debugEnabled=!debugEnabled"
                                             :value='debugEnabled? $t("settings.settings.experimental.disableDebugToolsButton") : $t("settings.settings.experimental.enableDebugToolsButton")'
                                             id="debugBtn"
@@ -980,13 +949,6 @@
                                     />
                                     <label for="allowNonFullscreen">AnF</label>
                                     <br />
-                                    <input
-                                        id="customChartServer"
-                                        class="input textInput"
-                                        style="width: 15em"
-                                        placeholder="Input custom chart lib url"
-                                        v-model="gameConfig.customChartServer"
-                                    />
                                     <div class="disabled-when-playing textInput">
                                         {{ $t("settings.mpServerURL") }}{{ $t("info.colon") }}
                                         <input

@@ -1087,26 +1087,12 @@ export default {
             });
         },
         async loadChartSecond(songInfo, chartInfo) {
-            const getPlayToken = async () => {
-                const chartData = JSON.parse(sessionStorage.getItem("loadedChart"));
-                if (!shared.game.ptmain.shouldNotUploadPhiZone) {
-                    try {
-                        await shared.game.ptmain.genPlayToken();
-                    } catch(e) {
-                        shared.game.msgHandler.sendMessage(shared.game.ptmain.$t("multiplayer.failed_tryAfter3Sec"), "error");
-                        setTimeout(updateLoadFinish, 3000);
-                        return; 
-                    }
-                } 
-                return;
-            }
             this.chartLoaded = true;
             recordMgr.chartInfo = {
                 songData: songInfo,
                 chartData: chartInfo,
                 speedInfo: this.speedInfo,
             };
-            await getPlayToken();
             if (this.owner && this.room.stage === 2) {
                 this.gameStartUI();
                 ploading.r("loadChart");

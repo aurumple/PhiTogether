@@ -1,8 +1,8 @@
 <script>
     import shared from "@utils/js/shared";
     import { partyMgr } from "@utils/js/partyMgr";
-    import { PhiZoneAPI as phizoneApi } from "@community/phizone";
     import ploading from "@utils/js/ploading.js";
+    import { refreshLocalPlayerRks } from "../../utils/ptServer";
     export default {
         name: "startPage",
         data() {
@@ -12,9 +12,6 @@
             };
         },
         computed: {
-            pzResUrlGlobal() {
-                "res.phizone.cn";
-            },
             loginInfo() {
                 return shared.game.ptmain.gameConfig.account.userBasicInfo;
             },
@@ -47,19 +44,23 @@
                 return partyMgr.list.aprfool2024.activate;
             },
         },
+        async activated() {
+            // 自建服务端模式：从服务端拉取本地 rks（best30 均值）用于玩家卡展示，
+            // 并同步顶栏玩家信息条（userBasicInfo.rks，此前后续游玩不更新）
+            if (this.loginStatus) this.refreshLocalRks();
+        },
         methods: {
             forcedFullscreen() {
                 shared.game.requestFullscreen(true);
             },
-            toB20() {
-                shared.game.ptmain.$router.push({
-                    path: "/playerB20",
-                    query: { id: this.loginInfo.id },
-                });
+            async refreshLocalRks() {
+                await refreshLocalPlayerRks();
+            },
+            toLocalLeaderboard() {
+                this.to("/ptLeaderboard");
             },
             async versionNumber() {
-                if (!spec.isPhiTogetherApp && (!this.loginStatus || !this.loginInfo.isPTDeveloper))
-                    this.to("/aboutpage");
+                if (!spec.isPhiTogetherApp) this.to("/aboutpage");
                 this.verClicked++;
                 if (this.verClicked == 7) {
                     const url = await shared.game.msgHandler.prompt(
@@ -83,13 +84,7 @@
             async logOut() {
                 if (!(await shared.game.msgHandler.confirm(this.$t("startPage.logoutConfirm"))))
                     return;
-                shared.game.ptmain.gameConfig.account = {
-                    tokenInfo: null,
-                    userBasicInfo: null,
-                    defaultConfigID: null,
-                };
-                shared.game.ptmain.noAccountMode = true;
-                // shared.game.ptmain.refreshUserInfoBar();
+                shared.game.ptmain.serverLogout();
                 shared.game.msgHandler.success(this.$t("startPage.logoutSuccessfully"));
             },
             checkIfCantPlay() {
@@ -104,27 +99,7 @@
             async singleGame() {
                 if (this.checkIfCantPlay()) return;
                 shared.game.ptmain.gameMode = "single";
-                if (!navigator.onLine) {
-                    await shared.game.msgHandler.warning(this.$t("startPage.offlineNotice"));
-                    this.to({ path: "/chartSelect", query: { offline: 1 } });
-                    return;
-                }
-                if (shared.game.ptmain.noAccountMode) {
-                    if (this.loginInfo) {
-                        if (
-                            await shared.game.msgHandler.confirm(this.$t("startPage.askForRelogin"))
-                        ) {
-                            if (!this.loginInfo) this.to({ path: "/login" });
-                            else this.reLogin();
-                            return;
-                        }
-                    } else
-                        shared.game.msgHandler.sendMessage(
-                            this.$t("startPage.askForLogin"),
-                            "error"
-                        );
-                }
-                this.to({ path: "/chartSelect" });
+                this.to({ path: "/chartSelect", query: { offline: 1 } });
             },
             async multiGame() {
                 if (this.checkIfCantPlay()) return;
@@ -142,29 +117,8 @@
                     else this.reLogin();
                     return;
                 }
-                try {
-                    ploading.l(this.$t("startPage.loadingUserConfig"), "multiGetJudg");
-                    const current = await phizoneApi.getSpecConfiguration(
-                        shared.game.ptmain.gameConfig.account.tokenInfo.access_token,
-                        shared.game.ptmain.gameConfig.account.defaultConfigID
-                    );
-                    ploading.r("multiGetJudg");
-                    if (current.goodJudgment != 160 || current.perfectJudgment != 80) {
-                        shared.game.msgHandler.failure(this.$t("startPage.judgeRangeMPNotice"));
-                        return;
-                    }
-                    if (shared.game.ptmain.gameConfig.fullScreenJudge) {
-                        shared.game.msgHandler.failure(
-                            this.$t("startPage.fullscreenjudgeMPNotice")
-                        );
-                        return;
-                    }
-                } catch {
-                    ploading.r("multiGetJudg");
-                    shared.game.msgHandler.sendMessage(
-                        this.$t("startPage.errLoadingUserConfig"),
-                        "error"
-                    );
+                if (shared.game.ptmain.gameConfig.fullScreenJudge) {
+                    shared.game.msgHandler.failure(this.$t("startPage.fullscreenjudgeMPNotice"));
                     return;
                 }
                 if (localStorage.lastMultiInfo) {
@@ -200,7 +154,7 @@
                 this.to({ path: "/multiIndex" });
             },
             reLogin() {
-                shared.game.ptmain.pzRefreshLogin();
+                shared.game.ptmain.restoreServerSession();
             },
         },
     };
@@ -213,8 +167,8 @@
                 <div id="playerCard" class="blur">
                     <div v-if="loginInfo" style="margin-bottom: 20px">
                         <div id="playerCardActions">
-                            <span @click="toB20()" v-if="loginStatus">
-                                {{ $t("startPage.viewB20") }}
+                            <span v-if="loginStatus" @click="toLocalLeaderboard()">
+                                {{ $t("startPage.localLeaderboard") }}
                             </span>
                             <span @click="reLogin()" v-else>{{ $t("startPage.retryLogin") }}</span>
                             &nbsp;&nbsp;
@@ -228,36 +182,27 @@
                                 id="playerCardUsrAvatar"
                                 :style="{ 'border-color': userColor }"
                             >
-                                <img
-                                    :src="loginInfo.avatar.replace('res.phi.zone', pzResUrlGlobal)"
-                                />
+                                <img :src="loginInfo.avatar" />
                             </div>
                         </div>
                         <div id="playerCardUsrName">{{ loginInfo.userName }}&nbsp;&nbsp;</div>
                         <br />
                         <div id="playerCardUsrInfo">
-                            PhiZone
+                            {{ $t("startPage.selfHosted") }}
                             <b style="color: green">{{ loginInfo.role.toUpperCase() }}</b>
-                            <div v-if="loginInfo.isPTDeveloper">
-                                PhiTogether
-                                <b style="color: DeepSkyBlue">DEVELOPER</b>
-                            </div>
                             <div v-if="!loginStatus">
                                 <b style="color: DarkOrange">OFFLINE</b>
                             </div>
-                            <br v-else />
-                            <br v-if="!loginInfo.isPTDeveloper" />
+                            <br />
                             <br />
                             ID
                             <b>{{ loginInfo.id }}</b>
-                            &nbsp; EXP
-                            <b>{{ loginInfo.experience.toFixed(0) }}</b>
                             <br />
                             RKS
                             <b>{{ loginInfo.rks.toFixed(3) }}</b>
                             <br />
                             <br />
-                            LAST LOGIN
+                            {{ $t("startPage.lastLogin") }}
                             <br />
                             <b>{{ lastLogin }}</b>
                         </div>
@@ -278,21 +223,19 @@
                         </div>
                         <br />
                         <div id="playerCardUsrInfo">
-                            PhiZone
+                            {{ $t("startPage.selfHosted") }}
                             <b style="color: green">GUEST</b>
                             <br />
                             <br />
                             <br />
                             ID
                             <b>--</b>
-                            &nbsp; EXP
-                            <b>---</b>
                             <br />
                             RKS
                             <b>--.---</b>
                             <br />
                             <br />
-                            LAST LOGIN
+                            {{ $t("startPage.lastLogin") }}
                             <br />
                             <b>----.--.-- --:--:--</b>
                         </div>
@@ -325,8 +268,8 @@
                 <input
                     class="blur startBtn btn-smooth"
                     type="button"
-                    :value="$t('startPage.caches')"
-                    @click="to('/cacheManage')"
+                    :value="$t('startPage.chartManage')"
+                    @click="to('/chartManage')"
                 />
                 <input
                     class="blur startBtn btn-smooth"
@@ -354,10 +297,6 @@
             </select></div> -->
             <a @click="to('/aboutPage')">
                 <b>{{ $t("startPage.about") }}</b>
-            </a>
-            &nbsp;|&nbsp;
-            <a href="https://status.phitogether.fun" target="_blank">
-                <b>{{ $t("startPage.serviceStatus") }}</b>
             </a>
             &nbsp;|&nbsp;
             <a @click="to('/changelogs')">

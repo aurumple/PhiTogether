@@ -1,29 +1,28 @@
 <script>
-    import { PhiZoneAPI as phizoneApi } from "@community/phizone";
-    import { TapTapApi } from "@community/phizone/taptap";
     import ploading from "@utils/js/ploading.js";
     import shared from "@utils/js/shared";
+    import * as serverApi from "@utils/serverApi";
+
+    // 自建服务端登录/注册（替代原 PhiZone 账号体系）。
+    // 成功后把用户信息写回 ptmain（applyServerUser），游客模式不登录也可游玩，
+    // 但成绩只存本地、不上传排行榜。
     export default {
         name: "login",
         data() {
             return {
+                mode: "login", // login | register
                 username: "",
                 password: "",
-                taptapAvailable: false,
-                taptapToBind: null,
-                taptapTapped: false,
+                confirmPassword: "",
+                nickname: "",
+                busy: false,
             };
         },
-        mounted() {
-            this.taptapAvailable = window.nativeApi && window.nativeApi.loginWithTapTap;
-        },
         methods: {
-            jumpReg() {
-                location.href =
-                    "https://www.phi.zone/session/register?redirect=" +
-                    encodeURIComponent(location.href);
+            switchMode() {
+                this.mode = this.mode === "login" ? "register" : "login";
             },
-            async doLogin() {
+            async doSubmit() {
                 const msgHandler = shared.game.msgHandler;
                 if (!this.username || !this.password) {
                     msgHandler.sendMessage(
@@ -32,81 +31,39 @@
                     );
                     return;
                 }
-                msgHandler.sendMessage(this.$t("login.loggingin"));
-                phizoneApi
-                    .refreshLogin(this.password, "password", this.username)
-                    .then(e => {
-                        shared.game.ptmain.gameConfig.account.tokenInfo = e;
-                        shared.game.ptmain
-                            .loadUserRelatedInfo(e.access_token)
-                            .then(async () => {
-                                if (!this.taptapToBind) this.$router.back();
-                                else {
-                                    // console.log(this.taptapToBind)
-                                    if (
-                                        await msgHandler.confirm(
-                                            this.$t("login.askTapTapBinding", {
-                                                username: this.taptapToBind.name,
-                                            })
-                                        )
-                                    ) {
-                                        msgHandler.sendMessage(this.$t("login.bindingTapTap"));
-                                        phizoneApi
-                                            .bindTapTap(e.access_token, this.taptapToBind.unionId)
-                                            .then(e => {
-                                                msgHandler.sendMessage(
-                                                    this.$t("login.bindTapTapSuccess"),
-                                                    "success",
-                                                    true
-                                                );
-                                                this.$router.back();
-                                            })
-                                            .catch(() => {
-                                                msgHandler.sendMessage(
-                                                    this.$t("login.bindTapTapFailure"),
-                                                    "error",
-                                                    true
-                                                );
-                                            });
-                                    } else {
-                                        this.$router.back();
-                                    }
-                                }
-                            })
-                            .catch(() => {});
-                    })
-                    .catch(e => {
-                        ploading.r();
-                        msgHandler.failure(e);
-                    });
+                if (this.mode === "register" && this.password !== this.confirmPassword) {
+                    msgHandler.sendMessage(this.$t("login.passwordMismatch"), "error");
+                    return;
+                }
+                if (this.busy) return;
+                this.busy = true;
+                ploading.l(this.$t("login.loggingin"), "login");
+                try {
+                    const user =
+                        this.mode === "login"
+                            ? await serverApi.login(this.username, this.password)
+                            : await serverApi.register({
+                                  username: this.username,
+                                  password: this.password,
+                                  confirm_password: this.confirmPassword,
+                                  nickname: this.nickname || undefined,
+                              });
+                    shared.game.ptmain.applyServerUser(user);
+                    msgHandler.sendMessage(
+                        this.$t("login.success", { userName: user.nickname || user.username }),
+                        "success",
+                        true
+                    );
+                    this.$router.push("/startPage");
+                } catch (e) {
+                    msgHandler.failure(e && e.message ? e.message : this.$t("login.failed"));
+                } finally {
+                    ploading.r("login");
+                    this.busy = false;
+                }
             },
-            async loginWithTapTap() {
-                if (this.taptapTapped) return;
-                this.taptapTapped = true;
-                const msgHandler = shared.game.msgHandler;
-                await TapTapApi.loginWithTapTap()
-                    .then(e => {
-                        // this.$router.back();
-                        msgHandler.sendMessage(this.$t("login.loggingin"));
-                        phizoneApi
-                            .refreshLogin(e.accessToken, "password", e.macKey, true)
-                            .then(e => {
-                                // console.log(e)
-                                this.$router.back();
-                                shared.game.ptmain.gameConfig.account.tokenInfo = e;
-                                shared.game.ptmain
-                                    .loadUserRelatedInfo(e.access_token)
-                                    // .then(() => this.$router.back())
-                                    .catch(() => {});
-                            })
-                            .catch(() => {
-                                msgHandler.failure(this.$t("login.noTapTapBinding"));
-                                this.taptapToBind = e;
-                                this.taptapAvailable = false;
-                            });
-                    })
-                    .catch(() => {});
-                this.taptapTapped = false;
+            playAsGuest() {
+                this.$router.push("/startPage");
             },
         },
     };
@@ -114,9 +71,11 @@
 
 <template>
     <div id="loginPage" class="routerRealPage">
-        <h1 class="loginPageRow" style="font-size: 2em">{{ $t("phizone.login.withPhiZone") }}</h1>
+        <h1 class="loginPageRow" style="font-size: 2em">
+            {{ mode === "login" ? $t("login.signin") : $t("login.signup") }}
+        </h1>
         <div class="loginPageRow">
-            {{ $t("login.email") }}：
+            {{ $t("login.username") }}：
             <input
                 class="input textInput"
                 style="width: calc(100% / 2)"
@@ -131,35 +90,54 @@
                 v-model="password"
                 style="width: calc(100% / 2)"
                 type="password"
-                autocomplete="current-password"
-                @keyup.enter="doLogin"
+                :autocomplete="mode === 'login' ? 'current-password' : 'new-password'"
+                @keyup.enter="doSubmit"
+            />
+        </div>
+        <div class="loginPageRow" v-if="mode === 'register'">
+            {{ $t("login.confirmPasswd") }}：
+            <input
+                class="input textInput"
+                v-model="confirmPassword"
+                style="width: calc(100% / 2)"
+                type="password"
+                autocomplete="new-password"
+                @keyup.enter="doSubmit"
+            />
+        </div>
+        <div class="loginPageRow" v-if="mode === 'register'">
+            {{ $t("login.nickname") }}：
+            <input
+                class="input textInput"
+                v-model="nickname"
+                style="width: calc(100% / 2)"
+                :placeholder="$t('login.nicknamePlaceholder')"
             />
         </div>
         <div class="loginPageRow">
             <input
                 type="button"
                 style="width: auto; font-size: 1.5em"
-                :value="$t('login.signin')"
-                @click="doLogin()"
+                :value="mode === 'login' ? $t('login.signin') : $t('login.signup')"
+                @click="doSubmit()"
             />
             <input
                 type="button"
                 style="width: auto; font-size: 1.5em"
-                :value="$t('login.signup')"
-                @click="jumpReg()"
+                :value="mode === 'login' ? $t('login.toSignup') : $t('login.toSignin')"
+                @click="switchMode()"
             />
         </div>
-        <h1 class="loginPageRow" style="font-size: 2em" v-if="taptapAvailable">
-            {{ $t("phizone.login.withTapTap") }}
-        </h1>
         <div class="loginPageRow">
-            <img
-                src="/src/core/loginWithTapTap.png"
-                style="width: 10em"
-                v-if="taptapAvailable"
-                @click="loginWithTapTap()"
-                alt="Login With TapTap"
+            <input
+                type="button"
+                style="width: auto; font-size: 1.2em"
+                :value="$t('login.playAsGuest')"
+                @click="playAsGuest()"
             />
+        </div>
+        <div class="loginPageRow" style="font-size: 0.85em; opacity: 0.75">
+            {{ $t("login.guestHint") }}
         </div>
     </div>
 </template>
@@ -177,6 +155,7 @@
     .loginPageRow {
         width: 100%;
         margin: 10px;
+        text-align: center;
     }
 
     .loginPageRow input:not([type="button"]) {

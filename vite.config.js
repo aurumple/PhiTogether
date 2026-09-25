@@ -12,13 +12,18 @@ export default defineConfig({
             "@components": path.resolve(__dirname, "src/components"),
             "@locales": path.resolve(__dirname, "src/locales"),
             "@renderers": path.resolve(__dirname, "src/components/renderer/renderers"),
-            "@community": path.resolve(__dirname, "src/components/community"),
         },
     },
     build: {
         cssTarget: "chrome61",
         esbuild: {
             drop: ["console", "debugger"],
+        },
+    },
+    server: {
+        // Dev: forward API calls to the self-hosted server (`python server/main.py`)
+        proxy: {
+            "/api": "http://127.0.0.1:8000",
         },
     },
     preview: {
