@@ -91,22 +91,33 @@ All endpoints are under `/api`; authentication is `Authorization: Bearer <jwt>`
 - `POST /api/auth/refresh` `{refresh_token}` → new token pair
 - `GET  /api/auth/me` → `{id, username, nickname, is_admin}`
 - `GET  /api/game/charts` → `{charts: [{name, path, size, valid, error, source,
-  song_id, song_name, composer, illustrator, charter, level, rating, cover,
-  chapter, chapter_order}], chapters: [{id, name, order}]}` —
+  song_id, song_name, composer, illustrator, charter, level, rating, chart_id,
+  cover, chapter, chapter_order}], chapters: [{id, name, order}]}` —
   merged view of manual packages (`source: "file"`) and shared-library entries
   (`source: "lib"`, virtual `<songID>.<LEVEL>.pez` built on demand), plus the
-  chapter index from `tools/phigros_chapters.json`
+  chapter index from `tools/phigros_chapters.json`. `chart_id` mirrors the
+  client-side id (md5 of the chart JSON text) so scores can be keyed before a
+  chart is downloaded
 - `GET  /api/game/charts/{filename}` → chart package download
 - `GET  /api/game/covers/{song_id}` → cover art of a shared-library song
-- `POST /api/game/pt/records` `{chart_id, song_name, difficulty, rating, score, acc, is_fc}` —
-  upserts the caller's best score per chart
+- `POST /api/game/pt/records` `{chart_id, song_name, difficulty, rating, score,
+  acc, is_fc, max_acc?, run_at?}` — upserts the caller's best run per chart.
+  `score`/`acc`/`is_fc` describe one run (the best by score, then accuracy, then
+  FC); `max_acc` is the highest accuracy ever achieved (rks input, defaults to
+  `acc`), `run_at` the run's ISO timestamp
+- `GET  /api/game/pt/chart-leaderboard?chart_id=` → `{chart_id, entries:
+  [{rank, user_id, name, score, acc, is_fc, run_at, rks, is_me}], me}` — the
+  chart's Top-10 ranks plus the caller's own standing. Identical
+  (score, acc, is_fc) rows share a rank (1, 2, 2, 4), so "top 10" is ten rank
+  numbers and may cover more than ten rows
 - `GET  /api/game/pt/leaderboard` → `{entries: [{user_id, name, rks, plays}], my_rank, my_rks}`
 - `GET  /api/game/pt/me` → `{records: [...], rks, limit}`
 - `GET  /api/health`
 
-Score math: chart rks = `rating * (acc/100)^2`, player rks = mean of the best 30
-charts. A record only replaces the stored one when it is better (score, then
-accuracy, then full-combo).
+Score math: chart rks = `rating * (max_acc/100)^2` (highest accuracy ever on
+that chart), player rks = mean of the best 30 charts. A record keeps the best
+run by (score, accuracy, full-combo); a weaker run never replaces it, but a
+higher `max_acc` still improves rks.
 
 ## Tests
 
