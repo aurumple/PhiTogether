@@ -1,0 +1,5 @@
+allowBuilds:
+  esbuild: true
+
+patchedDependencies:
+  notiflix@3.2.6: patches/notiflix@3.2.6.patch
