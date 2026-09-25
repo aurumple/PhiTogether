@@ -8,7 +8,8 @@
 
 ## 与上游的差异
 
-- **谱面统一从服务端获取**：移除 PhiZone、PT社区等联网谱面源。把 `.pez` / `.zip` 谱面包放进服务端 `data/charts/` 目录，玩家在游戏内「谱面管理」按需下载。本地导入与内置活动谱面保留。
+- **谱面统一从服务端获取**：移除 PhiZone、PT社区等联网谱面源。用附带的一键拉谱脚本（`server/tools/fetch_phigros_charts.py`，经 GitHub 镜像拉取 Phigros 全量谱面）填充服务端，或手动把 `.pez` / `.zip` 谱面包放进 `server/data/charts/`；玩家在游戏内「谱面管理」按需下载。本地导入与内置活动谱面保留。
+- **Phigros 式谱面管理界面**：歌曲列表 + 懒加载曲绘 + 按难度下载徽章（无音频预览）。服务端每曲只存一份音频、下载时按需打包 pez，客户端同曲多难度也共用一份音频，全难度下载不重复占存储。
 - **自建排行榜**：玩家在你的服务端注册；每局结束自动上传最佳成绩（离线自动补传），按 RKS（Best30 均值）排名。游客可玩，但成绩只存本地。
 - **附带精简服务端**（`server/`，Python + FastAPI）：账号（JWT）、谱面包、排行榜，仅此而已。详见 [server/README.md](server/README.md)。
 - **多人联机代码保留但禁用**（其依赖的房间服务器不在本发行版内），入口显示维护中。
@@ -32,7 +33,7 @@ python main.py           # 同时提供 API 与构建好的前端，http://127.0
 
 打开 `http://<主机>:8000`，注册账号（首个注册用户为管理员）即可开始游玩。
 
-**添加谱面**：把 `.pez` / `.zip` 谱面包放入 `server/data/charts/`，在游戏内「谱面管理」点「刷新」。损坏的谱面包会被标红并禁止下载。
+**添加谱面**：在 `server/` 下运行 `python tools/fetch_phigros_charts.py` 一键拉取 Phigros 全量谱面到 `server/data/charts-lib/`（自动走 GitHub 镜像，重跑只补缺失文件），或手动把 `.pez` / `.zip` 谱面包放入 `server/data/charts/`，然后在游戏内「谱面管理」点「刷新」。损坏的谱面包会被标红并禁止下载。详见 [server/README.md](server/README.md)。
 
 开发模式：`pnpm dev`（前端 :1145）+ `python server/main.py` 同时跑，dev 服务器会把 `/api` 代理到 :8000。
 

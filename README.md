@@ -8,7 +8,8 @@ This is a **self-hostable edition** of [Team-PhiTogether/PhiTogether](https://gi
 
 ## What changed compared to upstream
 
-- **Charts come from the server only.** The PhiZone and PT-Community chart sources are removed. You drop `.pez` / `.zip` chart packages into the server's `data/charts/` directory and players download them in-game via *Chart Management*. Local chart import and the bundled event charts still work.
+- **Charts come from the server only.** The PhiZone and PT-Community chart sources are removed. Fill the server with the bundled bulk tool (`server/tools/fetch_phigros_charts.py`, pulls the full Phigros chart set through GitHub mirrors) or drop `.pez` / `.zip` packages into `server/data/charts/` by hand; players download them in-game via *Chart Management*. Local chart import and the bundled event charts still work.
+- **Phigros-style chart management.** The manage page is a song list with lazy-loaded covers and per-difficulty download badges (no audio preview). The server stores one audio per song and packs each difficulty download on demand, and the client keeps one audio record per song, so downloading every difficulty never duplicates audio.
 - **Self-hosted leaderboard.** Players register on your server; best scores upload after each play (with an offline queue), and the leaderboard ranks everyone by RKS (mean of the best 30 charts). Guests can play, but their scores stay local.
 - **A minimal server is included** (`server/`, Python + FastAPI): accounts (JWT), chart packages and the leaderboard — nothing else. See [server/README.md](server/README.md).
 - **Multiplayer code is kept but disabled** (the room server it needs is not part of this edition); the entry shows a maintenance notice.
@@ -32,7 +33,7 @@ python main.py           # serves the API and the built client on http://127.0.0
 
 Then open `http://<host>:8000`, register (the first account becomes the admin) and start playing.
 
-**Adding charts:** put `.pez` / `.zip` chart packages into `server/data/charts/` and hit *Refresh* on the in-game *Chart Management* page. Corrupt packages are flagged and can't be downloaded.
+**Adding charts:** run `python tools/fetch_phigros_charts.py` in `server/` to pull the full Phigros chart library into `server/data/charts-lib/` (GitHub mirrors are used automatically; re-running fetches only what's missing), or put `.pez` / `.zip` chart packages into `server/data/charts/` by hand. Then hit *Refresh* on the in-game *Chart Management* page. Corrupt packages are flagged and can't be downloaded. See [server/README.md](server/README.md) for details.
 
 For development, run `pnpm dev` (client on :1145) alongside `python server/main.py` — the dev server proxies `/api` to `:8000`.
 
