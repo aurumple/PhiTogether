@@ -4,15 +4,25 @@
     import { authFetch } from "@utils/serverApi";
     import { chartDownloadQueue } from "@utils/chartDownloadQueue";
 
-    // 谱面管理：合并原「缓存」与「谱面下载」两页。
-    // 单列表同时呈现本地已缓存谱面（曲名/难度/大小，整组或按难度删除）与
-    // 服务端谱面包（下载/进度/服务端校验出的损坏标记）；通过已下载索引的
-    // songId 关联同一首谱面，支持「更新=删旧导新」「删除清标记」联动。
+    // 谱面管理：Phigros 式歌曲列表。
+    // 每行一首歌（曲绘缩略图 + 曲名/曲师 + 右侧难度徽章），徽章按难度独立
+    // 下载/更新/删除；曲绘按滚动可见性懒加载（不在列表中全量加载），无音频预览。
+    // 服务端条目（共享库虚拟 pez 与手动 .pez）与本地缓存按「已下载索引」合并：
+    // 同曲多难度共用一行，本地音频也只存一份（见 chartDiscovery）。
+    const LEVEL_COLORS = {
+        EZ: "#3ba55d",
+        HD: "#2f7fd3",
+        IN: "#d34040",
+        AT: "#8e44d3",
+        SP: "#7a8288",
+    };
+
     export default {
         name: "chartManage",
         data() {
             return {
                 search: "",
+                filter: "all",
                 localEntries: [],
                 localLoading: false,
                 serverFiles: [],
@@ -23,6 +33,7 @@
                 paused: false,
                 expanded: {},
                 dangerOpen: false,
+                coverUrls: {},
             };
         },
         computed: {
@@ -37,61 +48,136 @@
             localTotalSize() {
                 return this.localEntries.reduce((sum, e) => sum + (e.sizeBytes || 0), 0);
             },
-            // songId → 服务端文件 的反查表（同一文件名只取索引一次）
-            linkedFileOf() {
+            // 本地歌曲记录 id → { entry, byChartId, byLevel }
+            localById() {
                 const map = {};
-                for (const file of this.serverFiles) {
-                    const link = this.importedIndex[file.name];
-                    if (link && link.songId) map[link.songId] = file;
+                for (const entry of this.localEntries) {
+                    const byChartId = {};
+                    const byLevel = {};
+                    for (const chart of entry.song.charts || []) {
+                        byChartId[String(chart.id)] = chart;
+                        byLevel[String(chart.level || "").toUpperCase()] = chart;
+                    }
+                    map[String(entry.song.id)] = { entry, byChartId, byLevel };
                 }
                 return map;
             },
-            serverOnlyFiles() {
-                // 未被任何本地歌曲关联（songId 缺失或对不上）的服务端文件
-                return this.serverFiles.filter(file => {
-                    const link = this.importedIndex[file.name];
-                    if (!link) return true;
-                    if (link.songId && this.localEntries.some(e => String(e.song.id) === String(link.songId)))
-                        return false;
-                    return true; // 旧版记录（无 songId）或本地已被删除
-                });
-            },
-            downloadableFiles() {
-                return this.serverOnlyFiles.filter(f => f.valid !== false);
-            },
-            mergedEntries() {
-                const entries = [];
+            // 歌曲分组列表：服务端难度条目 + 本地记录合并后的行模型
+            songs() {
+                const groups = {};
+                const ensure = (key, base) => {
+                    if (!groups[key]) {
+                        groups[key] = {
+                            key,
+                            name: base.name || "",
+                            composer: base.composer || "",
+                            illustrator: base.illustrator || "",
+                            cover: base.cover || null,
+                            localSongId: null,
+                            diffs: [],
+                        };
+                    }
+                    return groups[key];
+                };
+
+                for (const file of this.serverFiles) {
+                    const key = file.song_id || "file:" + file.name;
+                    const group = ensure(key, {
+                        name: file.song_name,
+                        composer: file.composer,
+                        illustrator: file.illustrator,
+                        cover: file.cover,
+                    });
+                    const link = this.importedIndex[file.name] || null;
+                    const local = link && link.songId ? this.localById[String(link.songId)] : null;
+                    let localChart = null;
+                    if (local) {
+                        if (link.chartId) localChart = local.byChartId[String(link.chartId)] || null;
+                        if (!localChart) {
+                            const lv = String(file.level || "").toUpperCase();
+                            if (lv) localChart = local.byLevel[lv] || null;
+                        }
+                        group.localSongId = String(link.songId);
+                    }
+                    group.diffs.push({
+                        key: "s:" + file.name,
+                        level: String(file.level || "").toUpperCase() || "SP",
+                        rating: Number(file.rating) || 0,
+                        charter: file.charter || "",
+                        file,
+                        link,
+                        localChart,
+                        localSong: local ? local.entry : null,
+                        outdated: !!(link && local && link.size !== file.size),
+                    });
+                }
+
                 for (const entry of this.localEntries) {
-                    const linkedFile = this.linkedFileOf[String(entry.song.id)];
-                    const link = linkedFile ? this.importedIndex[linkedFile.name] : null;
-                    entries.push({
-                        kind: "local",
-                        key: "local:" + entry.song.id,
-                        song: entry.song,
-                        sizeBytes: entry.sizeBytes,
-                        linkedFile: linkedFile || null,
-                        outdated: !!(linkedFile && link && link.size !== linkedFile.size),
+                    const songId = String(entry.song.id);
+                    // 已并入服务端分组的本地歌曲不重复建行
+                    let merged = false;
+                    for (const key in groups) {
+                        if (groups[key].localSongId === songId) {
+                            merged = true;
+                            break;
+                        }
+                    }
+                    if (merged) continue;
+                    const group = ensure("local:" + songId, {
+                        name: entry.song.name,
+                        composer: entry.song.composer,
+                        illustrator: entry.song.illustrator,
                     });
+                    group.localSongId = songId;
+                    for (const chart of entry.song.charts || []) {
+                        group.diffs.push({
+                            key: "c:" + chart.id,
+                            level: String(chart.level || "").toUpperCase() || "SP",
+                            rating: Number(chart.difficulty) || 0,
+                            charter: chart.charter || "",
+                            file: null,
+                            link: null,
+                            localChart: chart,
+                            localSong: entry,
+                            outdated: false,
+                        });
+                    }
+                    if (!(entry.song.charts || []).length) {
+                        group.diffs.push({
+                            key: "e:" + songId,
+                            level: "SP",
+                            rating: 0,
+                            charter: "",
+                            file: null,
+                            link: null,
+                            localChart: null,
+                            localSong: entry,
+                            outdated: false,
+                        });
+                    }
                 }
-                for (const file of this.serverOnlyFiles) {
-                    entries.push({
-                        kind: "server",
-                        key: "server:" + file.name,
-                        file: file,
-                        legacyImported: !!this.importedIndex[file.name],
-                    });
-                }
+
+                let list = Object.values(groups);
                 const query = this.search.trim().toLowerCase();
-                const filtered = query
-                    ? entries.filter(e =>
-                          (e.kind === "local"
-                              ? String(e.song.name || "")
-                              : String(e.file.name || "")
-                          ).toLowerCase().includes(query))
-                    : entries;
-                const nameOf = e => (e.kind === "local" ? e.song.name : e.file.name) || "";
-                filtered.sort((a, b) => nameOf(a).localeCompare(nameOf(b), "zh"));
-                return filtered;
+                if (query) {
+                    list = list.filter(g =>
+                        [g.name, g.composer, g.illustrator]
+                            .join(" ")
+                            .toLowerCase()
+                            .includes(query)
+                    );
+                }
+                if (this.filter === "undownloaded")
+                    list = list.filter(g =>
+                        g.diffs.some(d => d.file && !d.localChart && d.file.valid !== false)
+                    );
+                else if (this.filter === "downloaded")
+                    list = list.filter(g => g.diffs.some(d => d.localChart));
+                else if (this.filter === "local")
+                    list = list.filter(g => g.diffs.some(d => !d.file && d.localChart));
+
+                list.sort((a, b) => (a.name || a.key).localeCompare(b.name || b.key, "zh"));
+                return list;
             },
         },
         methods: {
@@ -100,69 +186,107 @@
                 if (size >= 1024 * 1024) return (size / 1024 / 1024).toFixed(1) + " MB";
                 return Math.max(1, Math.round(size / 1024)) + " KB";
             },
-            difficultyText(chart) {
-                if (typeof chart.difficulty === "string") return chart.difficulty;
-                return chart.difficulty === 0 ? "?" : chart.difficulty.toFixed(1);
+            ratingText(diff) {
+                if (!diff.rating) return "?";
+                return String(diff.rating);
             },
-            difficultySummary(song) {
-                const charts = song.charts || [];
-                if (!charts.length) return this.$t("chartManage.noCharts");
-                return charts.map(c => `${c.level} ${this.difficultyText(c)}`).join(" / ");
+            levelColor(level) {
+                return LEVEL_COLORS[level] || LEVEL_COLORS.SP;
             },
-            queueItemOf(name) {
-                return this.queueItems.find(i => i.name === name) || null;
+            queueItemOf(diff) {
+                return diff.file ? this.queueItems.find(i => i.name === diff.file.name) || null : null;
             },
-            isBusy(item) {
-                return item && (item.status === "downloading" || item.status === "importing" || item.status === "queued");
+            diffState(diff) {
+                const item = this.queueItemOf(diff);
+                if (item) {
+                    if (item.status === "downloading" || item.status === "importing")
+                        return { kind: "busy", item };
+                    if (item.status === "queued") return { kind: "queued", item };
+                    if (item.status === "failed") return { kind: "failed", item };
+                }
+                if (diff.localChart) return { kind: "done", item };
+                if (diff.file && diff.file.valid === false) return { kind: "broken", item };
+                return { kind: "idle", item };
             },
-            toggleExpand(entry) {
-                this.expanded = {
-                    ...this.expanded,
-                    [entry.song.id]: !this.expanded[entry.song.id],
-                };
+            onBadge(diff) {
+                const state = this.diffState(diff);
+                if (state.kind === "idle" && diff.file) this.downloadDiff(diff);
+                else this.toggleExpandByKey(this.groupKeyOf(diff));
+            },
+            groupKeyOf(diff) {
+                for (const g of this.songs) {
+                    if (g.diffs.some(d => d.key === diff.key)) return g.key;
+                }
+                return "";
+            },
+            downloadDiff(diff) {
+                if (!diff.file || diff.file.valid === false) return;
+                chartDownloadQueue.enqueue([diff.file]);
+            },
+            downloadAll() {
+                const files = [];
+                for (const g of this.songs) {
+                    for (const d of g.diffs) {
+                        if (d.file && !d.localChart && d.file.valid !== false) files.push(d.file);
+                    }
+                }
+                if (files.length) chartDownloadQueue.enqueue(files);
+            },
+            retryItem(diff) {
+                const item = this.queueItemOf(diff);
+                if (item) chartDownloadQueue.retry(item.name);
+            },
+            toggleExpand(group) {
+                this.expanded = { ...this.expanded, [group.key]: !this.expanded[group.key] };
+            },
+            toggleExpandByKey(key) {
+                if (!key) return;
+                this.expanded = { ...this.expanded, [key]: !this.expanded[key] };
+            },
+            groupByKey(key) {
+                return this.songs.find(g => g.key === key) || null;
+            },
+            async deleteDiff(diff) {
+                const ok = await shared.game.msgHandler.confirm(
+                    this.$t("chartManage.confirmBeforeDelete")
+                );
+                if (!ok) return;
+                await this.deleteDiffSilent(diff);
+                shared.game.msgHandler.sendMessage(this.$t("chartManage.deleted"));
+            },
+            async deleteDiffSilent(diff) {
+                if (diff.localChart) {
+                    await ptdb.chart.chart.delete(diff.localChart.id).catch(() => {});
+                }
+                if (diff.file) await chartDownloadQueue.unlinkFile(diff.file.name);
+                await Promise.all([this.reloadLocal(), this.loadImported()]);
+            },
+            async updateDiff(diff) {
+                if (!diff.file || diff.file.valid === false) return;
+                await this.deleteDiffSilent(diff);
+                chartDownloadQueue.enqueue([diff.file]);
+            },
+            async deleteSongGroup(group) {
+                const ok = await shared.game.msgHandler.confirm(
+                    this.$t("chartManage.confirmDeleteGroup", [group.name || this.$t("chartManage.unnamed")])
+                );
+                if (!ok) return;
+                for (const diff of group.diffs) {
+                    if (diff.localChart) {
+                        await ptdb.chart.chart.delete(diff.localChart.id).catch(() => {});
+                    }
+                    if (diff.file) await chartDownloadQueue.unlinkFile(diff.file.name);
+                }
+                if (group.localSongId) {
+                    await ptdb.chart.song.delete(group.localSongId).catch(() => {});
+                    await chartDownloadQueue.unlinkSong(group.localSongId);
+                }
+                shared.game.msgHandler.sendMessage(this.$t("chartManage.deleted"));
+                await Promise.all([this.reloadLocal(), this.loadImported()]);
             },
             refreshQueue() {
                 this.queueItems = chartDownloadQueue.items.map(i => ({ ...i }));
                 this.paused = chartDownloadQueue.paused;
-            },
-            downloadFile(file) {
-                if (file.valid === false) return;
-                chartDownloadQueue.enqueue([file]);
-            },
-            downloadAll() {
-                if (!this.downloadableFiles.length) return;
-                chartDownloadQueue.enqueue(this.downloadableFiles);
-            },
-            retryItem(item) {
-                chartDownloadQueue.retry(item.name);
-            },
-            async updateFile(entry) {
-                // 更新 = 删旧导新（旧版本谱面先整组删除，再重新下载）
-                if (!entry.linkedFile || entry.linkedFile.valid === false) return;
-                await this.deleteSongGroup(entry, true);
-                chartDownloadQueue.enqueue([entry.linkedFile]);
-            },
-            async deleteSongGroup(entry, silent = false) {
-                const song = entry.song;
-                if (!silent) {
-                    const ok = await shared.game.msgHandler.confirm(
-                        this.$t("chartManage.confirmDeleteGroup", [song.name || this.$t("chartManage.unnamed")])
-                    );
-                    if (!ok) return;
-                }
-                for (const chart of song.charts || []) {
-                    await ptdb.chart.chart.delete(chart.id).catch(() => {});
-                }
-                await ptdb.chart.song.delete(song.id).catch(() => {});
-                await chartDownloadQueue.unlinkSong(String(song.id));
-                if (!silent)
-                    shared.game.msgHandler.sendMessage(this.$t("chartManage.deleted"));
-                // unlinkSong 只清了持久化索引，页面内存的 importedIndex 需同步刷新
-                await Promise.all([this.reloadLocal(), this.loadImported()]);
-            },
-            async deleteChart(entry, chart) {
-                await ptdb.chart.chart.delete(chart.id).catch(() => {});
-                await this.reloadLocal();
             },
             async reloadLocal() {
                 this.localLoading = true;
@@ -172,24 +296,16 @@
                     for (const song of songs) {
                         // Blob.size 是元数据读取，不触发文件内容加载
                         let sizeBytes = 0;
-                        const cachedSong = await ptdb.chart.song
-                            .get(song.id)
-                            .catch(() => null);
+                        const cachedSong = await ptdb.chart.song.get(song.id).catch(() => null);
                         if (cachedSong) {
+                            sizeBytes += (cachedSong.songFile && cachedSong.songFile.size) || 0;
                             sizeBytes +=
-                                (cachedSong.songFile && cachedSong.songFile.size) || 0;
-                            sizeBytes +=
-                                (cachedSong.illustrationFile &&
-                                    cachedSong.illustrationFile.size) ||
-                                0;
+                                (cachedSong.illustrationFile && cachedSong.illustrationFile.size) || 0;
                         }
                         for (const chart of song.charts || []) {
-                            const cachedChart = await ptdb.chart.chart
-                                .get(chart.id)
-                                .catch(() => null);
+                            const cachedChart = await ptdb.chart.chart.get(chart.id).catch(() => null);
                             if (cachedChart)
-                                sizeBytes +=
-                                    (cachedChart.chartFile && cachedChart.chartFile.size) || 0;
+                                sizeBytes += (cachedChart.chartFile && cachedChart.chartFile.size) || 0;
                         }
                         entries.push({ song, sizeBytes });
                     }
@@ -206,7 +322,7 @@
                     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
                     const data = await resp.json();
                     this.serverFiles = (data.charts || []).slice().sort((a, b) =>
-                        a.name.localeCompare(b.name)
+                        String(a.song_name || a.name).localeCompare(String(b.song_name || b.name))
                     );
                 } catch (e) {
                     this.loadError = e.message || this.$t("chartManage.loadFailed");
@@ -254,24 +370,51 @@
                         break;
                 }
             },
+
+            // ===== 曲绘懒加载：滚动进入视口才取图（服务端封面/本地曲绘） =====
+            async ensureCover(group) {
+                const key = group.key;
+                if (this.coverUrls[key] !== undefined) return;
+                this.coverUrls[key] = ""; // 先占位，避免重复请求
+                let url = "";
+                try {
+                    if (group.cover) {
+                        const sep = group.cover.includes("?") ? "&" : "?";
+                        const resp = await authFetch(group.cover + sep + "nocache=nocache");
+                        if (resp.ok) url = URL.createObjectURL(await resp.blob());
+                    } else if (group.localSongId) {
+                        const song = await ptdb.chart.song.get(group.localSongId).catch(() => null);
+                        if (song && song.illustrationFile && song.illustrationFile.size)
+                            url = URL.createObjectURL(song.illustrationFile);
+                    }
+                } catch {
+                    url = "";
+                }
+                this.coverUrls[key] = url;
+            },
+            observeRows() {
+                if (!this._observer || !this.$el) return;
+                const rows = this.$el.querySelectorAll(".cmRow[data-key]:not([data-observed])");
+                for (const row of rows) {
+                    row.setAttribute("data-observed", "1");
+                    this._observer.observe(row);
+                }
+            },
+            coverInitial(name) {
+                return (name || "?").trim().charAt(0).toUpperCase();
+            },
         },
         async activated() {
             // 基线：当前已完成的下载不再触发刷新（refreshAll 本身会重载列表）
             this._seenDone = new Set(
-                chartDownloadQueue.items
-                    .filter(i => i.status === "done")
-                    .map(i => i.name)
+                chartDownloadQueue.items.filter(i => i.status === "done").map(i => i.name)
             );
             this.refreshQueue();
             await this.refreshAll();
         },
-        // keep-alive 下 activated 在首次挂载与每次进入页面时都会触发，
-        // mounted 只负责订阅队列变化
         mounted() {
             this._seenDone = new Set(
-                chartDownloadQueue.items
-                    .filter(i => i.status === "done")
-                    .map(i => i.name)
+                chartDownloadQueue.items.filter(i => i.status === "done").map(i => i.name)
             );
             this._unsubscribe = chartDownloadQueue.subscribe(() => {
                 this.refreshQueue();
@@ -295,9 +438,32 @@
                     this.reloadLocal();
                 }
             });
+            // 曲绘懒加载：进入视口约 300px 内才真正取图
+            if (typeof IntersectionObserver !== "undefined") {
+                this._observer = new IntersectionObserver(
+                    entries => {
+                        for (const en of entries) {
+                            if (!en.isIntersecting) continue;
+                            const key = en.target.getAttribute("data-key");
+                            const group = key ? this.groupByKey(key) : null;
+                            if (group) this.ensureCover(group);
+                            this._observer.unobserve(en.target);
+                        }
+                    },
+                    { rootMargin: "300px 0px" }
+                );
+                this.$nextTick(() => this.observeRows());
+            }
+        },
+        updated() {
+            this.observeRows();
         },
         beforeUnmount() {
             if (this._unsubscribe) this._unsubscribe();
+            if (this._observer) this._observer.disconnect();
+            for (const key of Object.keys(this.coverUrls)) {
+                if (this.coverUrls[key]) URL.revokeObjectURL(this.coverUrls[key]);
+            }
         },
     };
 </script>
@@ -326,10 +492,33 @@
                     <input
                         type="button"
                         :value="$t('chartManage.downloadAll')"
-                        :disabled="serverLoading || !downloadableFiles.length"
+                        :disabled="serverLoading || filter === 'local'"
                         @click="downloadAll()"
                     />
                 </span>
+            </div>
+
+            <div class="cmFilters">
+                <span
+                    class="cmFilter"
+                    :class="{ cmFilterOn: filter === 'all' }"
+                    @click="filter = 'all'"
+                >{{ $t("chartManage.filterAll") }}</span>
+                <span
+                    class="cmFilter"
+                    :class="{ cmFilterOn: filter === 'undownloaded' }"
+                    @click="filter = 'undownloaded'"
+                >{{ $t("chartManage.filterUndownloaded") }}</span>
+                <span
+                    class="cmFilter"
+                    :class="{ cmFilterOn: filter === 'downloaded' }"
+                    @click="filter = 'downloaded'"
+                >{{ $t("chartManage.filterDownloaded") }}</span>
+                <span
+                    class="cmFilter"
+                    :class="{ cmFilterOn: filter === 'local' }"
+                    @click="filter = 'local'"
+                >{{ $t("chartManage.filterLocal") }}</span>
             </div>
 
             <div v-if="paused" class="cmNotice">
@@ -347,137 +536,158 @@
                 <div v-if="localLoading && !localEntries.length" class="cmEmpty">
                     {{ $t("chartManage.loadingLocal") }}
                 </div>
-                <div
-                    v-else-if="!mergedEntries.length"
-                    class="cmEmpty"
-                >
+                <div v-else-if="!songs.length" class="cmEmpty">
                     {{ $t("chartManage.empty") }}
                 </div>
-                <div v-for="entry in mergedEntries" :key="entry.key" class="cmItem">
-                    <!-- 本地谱面（可能与某个服务端文件关联） -->
-                    <template v-if="entry.kind === 'local'">
-                        <div class="cmItemMain">
-                            <div class="cmItemInfo" @click="toggleExpand(entry)">
-                                <div class="cmItemName">
-                                    {{ entry.song.name || $t("chartManage.unnamed") }}
-                                    <span v-if="entry.linkedFile" class="cmTag cmTagDone">{{ $t("chartManage.tagDownloaded") }}</span>
-                                    <span v-else class="cmTag cmTagLocal">{{ $t("chartManage.tagLocalUpload") }}</span>
-                                    <span
-                                        v-if="entry.linkedFile && entry.linkedFile.valid === false"
-                                        class="cmTag cmTagBroken"
-                                        :title="entry.linkedFile.error"
-                                    >{{ $t("chartManage.tagBrokenServer") }}</span>
-                                </div>
-                                <div class="cmItemMeta">
-                                    {{ entry.song.composer || $t("chartManage.unknownComposer") }} · {{ difficultySummary(entry.song) }} · {{ formatSize(entry.sizeBytes) }}
-                                    <template v-if="entry.outdated">· {{ $t("chartManage.outdated") }}</template>
-                                </div>
+
+                <div
+                    v-for="group in songs"
+                    :key="group.key"
+                    class="cmRow"
+                    :class="{ cmRowOpen: expanded[group.key] }"
+                    :data-key="group.key"
+                >
+                    <div class="cmRowMain" @click="toggleExpand(group)">
+                        <div class="cmCoverWrap">
+                            <img
+                                v-if="coverUrls[group.key]"
+                                class="cmCover"
+                                :src="coverUrls[group.key]"
+                                alt=""
+                            />
+                            <div v-else class="cmCover cmCoverEmpty">
+                                {{ coverInitial(group.name) }}
                             </div>
-                            <div class="cmItemAction">
-                                <template v-if="entry.linkedFile && queueItemOf(entry.linkedFile.name) && isBusy(queueItemOf(entry.linkedFile.name))">
+                        </div>
+                        <div class="cmRowInfo">
+                            <div class="cmRowName">
+                                {{ group.name || $t("chartManage.unnamed") }}
+                                <span
+                                    v-if="group.diffs.some(d => d.file && !d.localChart)"
+                                    class="cmTag cmTagServer"
+                                >{{ $t("chartManage.subtitleServer", [group.diffs.filter(d => d.file && !d.localChart).length]) }}</span>
+                                <span
+                                    v-if="group.diffs.some(d => !d.file && d.localChart)"
+                                    class="cmTag cmTagLocal"
+                                >{{ $t("chartManage.tagLocalUpload") }}</span>
+                            </div>
+                            <div class="cmRowMeta">
+                                {{ group.composer || $t("chartManage.unknownComposer") }}
+                                <template v-if="group.illustrator"> × {{ group.illustrator }}</template>
+                            </div>
+                        </div>
+                        <div class="cmBadges">
+                            <div
+                                v-for="diff in group.diffs"
+                                :key="diff.key"
+                                class="cmBadge"
+                                :class="[
+                                    'cmBadge-' + diffState(diff).kind,
+                                    expanded[group.key] ? 'cmBadgeOpen' : ''
+                                ]"
+                                :style="{ backgroundColor: levelColor(diff.level) }"
+                                :title="diff.charter ? $t('chartManage.charter', [diff.charter]) : ''"
+                                @click.stop="onBadge(diff)"
+                            >
+                                <span class="cmBadgeLv">{{ diff.level }}</span>
+                                <span class="cmBadgeRating">{{ ratingText(diff) }}</span>
+                                <span v-if="diffState(diff).kind === 'done'" class="cmBadgeMark">
+                                    <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">
+                                        <path d="M2 6.5 L5 9.5 L10 3" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                                    </svg>
+                                </span>
+                                <span v-else-if="diffState(diff).kind === 'busy'" class="cmBadgeMark cmBadgePct">
+                                    {{ diffState(diff).item.progress || 0 }}
+                                </span>
+                                <span v-else-if="diffState(diff).kind === 'failed'" class="cmBadgeMark">!</span>
+                                <span v-else-if="diffState(diff).kind === 'broken'" class="cmBadgeMark">!</span>
+                                <span v-else class="cmBadgeMark">
+                                    <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">
+                                        <path d="M6 2 L6 8 M3 6.5 L6 9.5 L9 6.5" fill="none" stroke="#fff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+                                    </svg>
+                                </span>
+                            </div>
+                        </div>
+                        <div class="cmChevron" :class="{ cmChevronOpen: expanded[group.key] }">
+                            <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
+                                <path d="M3 4.5 L6 8 L9 4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+                            </svg>
+                        </div>
+                    </div>
+
+                    <div v-if="expanded[group.key]" class="cmDetail">
+                        <div v-for="diff in group.diffs" :key="diff.key" class="cmDiffRow">
+                            <div class="cmDiffInfo">
+                                <span class="cmDiffLv" :style="{ backgroundColor: levelColor(diff.level) }">{{ diff.level }}</span>
+                                <span class="cmDiffText">
+                                    Lv.{{ ratingText(diff) }}
+                                    <template v-if="diff.charter"> · {{ $t("chartManage.charter", [diff.charter]) }}</template>
+                                    <template v-if="diff.file"> · {{ formatSize(diff.file.size) }}</template>
+                                    <template v-if="diff.outdated"> · {{ $t("chartManage.outdated") }}</template>
+                                    <template v-if="diff.file && diff.file.valid === false"> · {{ diff.file.error }}</template>
+                                </span>
+                            </div>
+                            <div class="cmDiffActions">
+                                <template v-if="diffState(diff).kind === 'busy'">
                                     <div class="cmProgressWrap">
                                         <div class="cmProgressBar">
                                             <div
                                                 class="cmProgressFill"
-                                                :style="{ width: (queueItemOf(entry.linkedFile.name).progress || 0) + '%' }"
+                                                :style="{ width: (diffState(diff).item.progress || 0) + '%' }"
                                             ></div>
                                         </div>
                                         <span class="cmProgressText">
-                                            {{ queueItemOf(entry.linkedFile.name).status === 'importing' ? $t("chartManage.importing") : (queueItemOf(entry.linkedFile.name).progress || 0) + '%' }}
+                                            {{ diffState(diff).item.status === 'importing' ? $t("chartManage.importing") : (diffState(diff).item.progress || 0) + '%' }}
                                         </span>
                                     </div>
                                 </template>
-                                <template v-else-if="entry.linkedFile && queueItemOf(entry.linkedFile.name) && queueItemOf(entry.linkedFile.name).status === 'failed'">
-                                    <span class="cmFailedText">{{ queueItemOf(entry.linkedFile.name).error || $t("chartManage.downloadFailed") }}</span>
-                                    <input type="button" :value="$t('chartManage.retry')" @click="retryItem(queueItemOf(entry.linkedFile.name))" />
+                                <template v-else-if="diffState(diff).kind === 'queued'">
+                                    <span class="cmTag cmTagQueued">{{ $t("chartManage.tagQueued") }}</span>
                                 </template>
-                                <input
-                                    v-if="entry.outdated && entry.linkedFile.valid !== false"
-                                    type="button"
-                                    :value="$t('chartManage.update')"
-                                    @click="updateFile(entry)"
-                                />
-                                <input type="button" :value="$t('chartManage.delete')" @click="deleteSongGroup(entry)" />
-                                <input
-                                    type="button"
-                                    class="cmExpandBtn"
-                                    :value="expanded[entry.song.id] ? $t('chartManage.collapse') : $t('chartManage.expand')"
-                                    @click="toggleExpand(entry)"
-                                />
-                            </div>
-                        </div>
-                        <div v-if="expanded[entry.song.id]" class="cmCharts">
-                            <div v-if="!(entry.song.charts || []).length" class="cmChartsEmpty">
-                                {{ $t("chartManage.noChartFiles") }}
-                            </div>
-                            <div v-for="chart in entry.song.charts" :key="chart.id" class="cmChartRow">
-                                <div class="cmChartInfo">
-                                    {{ chart.level }} {{ difficultyText(chart) }}
-                                    <template v-if="chart.charter">· {{ $t("chartManage.charter", [chart.charter]) }}</template>
-                                </div>
-                                <input type="button" :value="$t('chartManage.delete')" @click="deleteChart(entry, chart)" />
-                            </div>
-                        </div>
-                    </template>
-
-                    <!-- 仅服务端的谱面包（或旧版导入记录未关联） -->
-                    <template v-else>
-                        <div class="cmItemMain">
-                            <div class="cmItemInfo">
-                                <div class="cmItemName">
-                                    {{ entry.file.name }}
-                                    <span v-if="entry.file.valid === false" class="cmTag cmTagBroken" :title="entry.file.error">{{ $t("chartManage.tagBroken") }}</span>
-                                    <span v-else-if="entry.legacyImported" class="cmTag cmTagLegacy">{{ $t("chartManage.tagUnlinked") }}</span>
-                                </div>
-                                <div class="cmItemMeta">
-                                    {{ formatSize(entry.file.size) }}
-                                    <template v-if="entry.file.valid === false">· {{ entry.file.error }}</template>
-                                </div>
-                            </div>
-                            <div class="cmItemAction">
-                                <template v-if="queueItemOf(entry.file.name)">
-                                    <template v-if="queueItemOf(entry.file.name).status === 'downloading' || queueItemOf(entry.file.name).status === 'importing'">
-                                        <div class="cmProgressWrap">
-                                            <div class="cmProgressBar">
-                                                <div
-                                                    class="cmProgressFill"
-                                                    :style="{ width: (queueItemOf(entry.file.name).progress || 0) + '%' }"
-                                                ></div>
-                                            </div>
-                                            <span class="cmProgressText">
-                                                {{ queueItemOf(entry.file.name).status === 'importing' ? $t("chartManage.importing") : (queueItemOf(entry.file.name).progress || 0) + '%' }}
-                                            </span>
-                                        </div>
-                                    </template>
-                                    <span v-else-if="queueItemOf(entry.file.name).status === 'queued'" class="cmTag cmTagQueued">{{ $t("chartManage.tagQueued") }}</span>
-                                    <span v-else-if="queueItemOf(entry.file.name).status === 'failed'" class="cmFailed">
-                                        <span class="cmFailedText">{{ queueItemOf(entry.file.name).error || $t("chartManage.downloadFailed") }}</span>
-                                        <input type="button" :value="$t('chartManage.retry')" @click="retryItem(queueItemOf(entry.file.name))" />
-                                    </span>
-                                    <!-- done：以已下载索引为准（本地删除后索引被清，
-                                         队列里的历史完成态不应继续显示「已下载」） -->
-                                    <span v-else-if="entry.legacyImported" class="cmTag cmTagDone">{{ $t("chartManage.tagDownloaded") }}</span>
+                                <template v-else-if="diffState(diff).kind === 'failed'">
+                                    <span class="cmFailedText">{{ diffState(diff).item.error || $t("chartManage.downloadFailed") }}</span>
+                                    <input type="button" :value="$t('chartManage.retry')" @click="retryItem(diff)" />
+                                </template>
+                                <template v-else-if="diffState(diff).kind === 'broken'">
+                                    <span class="cmTag cmTagBroken" :title="diff.file.error">{{ $t("chartManage.tagBroken") }}</span>
+                                </template>
+                                <template v-else-if="diffState(diff).kind === 'done'">
                                     <input
-                                        v-else-if="entry.file.valid !== false"
+                                        v-if="diff.file && diff.outdated"
                                         type="button"
-                                        :value="$t('chartManage.download')"
-                                        @click="downloadFile(entry.file)"
+                                        :value="$t('chartManage.update')"
+                                        @click="updateDiff(diff)"
+                                    />
+                                    <input
+                                        type="button"
+                                        :value="$t('chartManage.delete')"
+                                        @click="deleteDiff(diff)"
                                     />
                                 </template>
-                                <input
-                                    v-else-if="entry.file.valid !== false"
-                                    type="button"
-                                    :value="entry.legacyImported ? $t('chartManage.redownload') : $t('chartManage.download')"
-                                    @click="downloadFile(entry.file)"
-                                />
+                                <template v-else>
+                                    <input
+                                        v-if="diff.file"
+                                        type="button"
+                                        :value="diff.link ? $t('chartManage.redownload') : $t('chartManage.download')"
+                                        @click="downloadDiff(diff)"
+                                    />
+                                </template>
                             </div>
                         </div>
-                    </template>
+                        <div class="cmDetailFoot">
+                            <input
+                                v-if="group.diffs.some(d => d.localChart)"
+                                type="button"
+                                :value="$t('chartManage.delete')"
+                                @click="deleteSongGroup(group)"
+                            />
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
 
-        <!-- 高级清理（原「缓存」页的全局操作） -->
+        <!-- 高级清理（全局操作） -->
         <div class="cmPanel blur cmDangerPanel">
             <div class="cmDangerHeader" @click="dangerOpen = !dangerOpen">
                 <span>{{ $t("chartManage.dangerTitle") }}</span>
@@ -545,6 +755,30 @@
         background-color: #ffffff88;
     }
 
+    #chartManage .cmFilters {
+        display: flex;
+        gap: 8px;
+        padding: 8px 2px 4px;
+        flex-wrap: wrap;
+    }
+
+    #chartManage .cmFilter {
+        padding: 2px 12px;
+        border-radius: 999px;
+        border: 1px solid #0000002a;
+        background-color: #ffffff55;
+        color: #00000099;
+        font-size: 0.85em;
+        cursor: pointer;
+        user-select: none;
+    }
+
+    #chartManage .cmFilterOn {
+        background-color: #2b5793;
+        border-color: #2b5793;
+        color: white;
+    }
+
     #chartManage .cmNotice {
         margin-top: 8px;
         padding: 6px 10px;
@@ -566,49 +800,79 @@
         font-style: italic;
     }
 
-    #chartManage .cmItem {
+    /* ===== Phigros 式歌曲行 ===== */
+    #chartManage .cmRow {
         border-bottom: 1px solid #00000014;
     }
 
-    #chartManage .cmItem:last-child {
+    #chartManage .cmRow:last-child {
         border-bottom: none;
     }
 
-    #chartManage .cmItemMain {
+    #chartManage .cmRowMain {
         display: flex;
         align-items: center;
-        justify-content: space-between;
         gap: 12px;
         padding: 8px 10px;
-    }
-
-    #chartManage .cmItemInfo {
-        min-width: 0;
-        flex: 1;
         cursor: pointer;
+        border-radius: 10px;
     }
 
-    #chartManage .cmItemName {
-        font-size: 0.95em;
-        color: black;
+    #chartManage .cmRowMain:hover {
+        background-color: #ffffff70;
+    }
+
+    #chartManage .cmRowOpen .cmRowMain {
+        background-color: #ffffff90;
+    }
+
+    #chartManage .cmCoverWrap {
+        flex-shrink: 0;
+        width: 72px;
+        height: 72px;
+    }
+
+    #chartManage .cmCover {
+        width: 72px;
+        height: 72px;
+        border-radius: 10px;
+        object-fit: cover;
+        display: block;
+        box-shadow: 0 1px 4px #00000030;
+    }
+
+    #chartManage .cmCoverEmpty {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.6em;
+        font-weight: bold;
+        color: #ffffffcc;
+        background: linear-gradient(135deg, #7d8f9c, #4a5a68);
+    }
+
+    #chartManage .cmRowInfo {
+        flex: 1;
+        min-width: 0;
+        text-align: left;
+    }
+
+    #chartManage .cmRowName {
+        font-size: 1.05em;
+        font-weight: bold;
+        color: #1c2b36;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
     }
 
-    #chartManage .cmItemMeta {
-        font-size: 0.78em;
-        color: #00000077;
-        margin-top: 2px;
-    }
-
-    #chartManage .cmItemAction {
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-        flex-shrink: 0;
-        min-width: 160px;
-        justify-content: flex-end;
+    #chartManage .cmRowMeta {
+        font-size: 0.8em;
+        color: #00000088;
+        margin-top: 3px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
 
     #chartManage .cmTag {
@@ -616,25 +880,20 @@
         margin-left: 6px;
         padding: 1px 8px;
         border-radius: 4px;
-        font-size: 0.78em;
+        font-size: 0.72em;
         line-height: 1.4;
+        font-weight: normal;
         white-space: nowrap;
         vertical-align: middle;
     }
 
-    #chartManage .cmTagDone {
-        background-color: #4caf5026;
-        color: #2e7d32;
-        border: 1px solid #4caf5055;
-    }
-
-    #chartManage .cmTagLocal {
+    #chartManage .cmTagServer {
         background-color: #2b57931a;
         color: #2b5793;
         border: 1px solid #2b579355;
     }
 
-    #chartManage .cmTagLegacy {
+    #chartManage .cmTagLocal {
         background-color: #9e9e9e26;
         color: #616161;
         border: 1px solid #9e9e9e55;
@@ -652,11 +911,153 @@
         border: 1px solid #c6282855;
     }
 
+    /* ===== 难度徽章 ===== */
+    #chartManage .cmBadges {
+        display: flex;
+        gap: 6px;
+        flex-shrink: 0;
+    }
+
+    #chartManage .cmBadge {
+        position: relative;
+        width: 46px;
+        height: 46px;
+        border-radius: 10px;
+        cursor: pointer;
+        color: white;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 1px 3px #00000033;
+        user-select: none;
+    }
+
+    #chartManage .cmBadge:hover {
+        filter: brightness(1.12);
+    }
+
+    #chartManage .cmBadgeOpen {
+        outline: 2px solid #ffffffcc;
+    }
+
+    #chartManage .cmBadge-busy {
+        opacity: 0.85;
+    }
+
+    #chartManage .cmBadge-broken {
+        filter: grayscale(0.8);
+    }
+
+    #chartManage .cmBadgeLv {
+        font-size: 0.72em;
+        font-weight: bold;
+        line-height: 1;
+        letter-spacing: 0.06em;
+    }
+
+    #chartManage .cmBadgeRating {
+        font-size: 0.95em;
+        font-weight: bold;
+        line-height: 1.15;
+    }
+
+    #chartManage .cmBadgeMark {
+        position: absolute;
+        right: 3px;
+        bottom: 2px;
+        font-size: 0.62em;
+        line-height: 1;
+        opacity: 0.95;
+    }
+
+    #chartManage .cmBadgePct {
+        background-color: #00000055;
+        border-radius: 4px;
+        padding: 0 2px;
+    }
+
+    #chartManage .cmChevron {
+        flex-shrink: 0;
+        color: #00000066;
+        transition: transform 0.15s;
+    }
+
+    #chartManage .cmChevronOpen {
+        transform: rotate(180deg);
+    }
+
+    /* ===== 展开的难度明细 ===== */
+    #chartManage .cmDetail {
+        padding: 2px 10px 10px 94px;
+        text-align: left;
+    }
+
+    #chartManage .cmDiffRow {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 5px 0;
+        border-bottom: 1px dashed #00000014;
+    }
+
+    #chartManage .cmDiffRow:last-of-type {
+        border-bottom: none;
+    }
+
+    #chartManage .cmDiffInfo {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+    }
+
+    #chartManage .cmDiffLv {
+        flex-shrink: 0;
+        min-width: 34px;
+        text-align: center;
+        padding: 1px 6px;
+        border-radius: 5px;
+        color: white;
+        font-size: 0.78em;
+        font-weight: bold;
+    }
+
+    #chartManage .cmDiffText {
+        font-size: 0.82em;
+        color: #000000aa;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    #chartManage .cmDiffActions {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        flex-shrink: 0;
+        min-width: 150px;
+        justify-content: flex-end;
+    }
+
+    #chartManage .cmDetailFoot {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding-top: 8px;
+    }
+
+    #chartManage .cmDetailSize {
+        font-size: 0.78em;
+        color: #00000077;
+    }
+
     #chartManage .cmProgressWrap {
         display: flex;
         align-items: center;
         gap: 6px;
-        width: 160px;
+        width: 150px;
     }
 
     #chartManage .cmProgressBar {
@@ -682,43 +1083,13 @@
         white-space: nowrap;
     }
 
-    #chartManage .cmFailed {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-    }
-
     #chartManage .cmFailedText {
-        max-width: 220px;
+        max-width: 180px;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
         font-size: 0.78em;
         color: #c62828;
-    }
-
-    #chartManage .cmCharts {
-        padding: 0 10px 8px 24px;
-    }
-
-    #chartManage .cmChartRow {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 10px;
-        padding: 4px 0;
-    }
-
-    #chartManage .cmChartInfo {
-        flex: 1;
-        font-size: 0.85em;
-        color: #000000aa;
-    }
-
-    #chartManage .cmChartsEmpty {
-        font-size: 0.85em;
-        color: #00000077;
-        font-style: italic;
     }
 
     #chartManage .cmDangerPanel {
