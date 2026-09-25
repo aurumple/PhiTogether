@@ -130,6 +130,10 @@
         "title": "Changelogs"
     },
     "chartSelect": {
+        "play": "Play",
+        "chapters": {
+            "favorites": "Favorites"
+        },
         "jumpto": "Insert your destination page (1 - {0})",
         "inputDosentMatchRequirement": "Invalid input",
         "favourites": {
@@ -178,7 +182,7 @@
         "thisSongHasNoPlayableCharts": "No chart is available for this song. ",
         "chartSelect": "Chart Selection",
         "config": "Gameplay Config",
-        "chartListIsEmptyOffline": "No cached charts available. Download charts in Chart Management first.",
+        "chartListIsEmptyOffline": "No cached charts available offline. Download charts online first.",
         "chartListIsEmptyFavorite": "No favorited charts yet",
         "goDownloadCharts": "Get charts"
     },

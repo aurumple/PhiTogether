@@ -130,6 +130,10 @@
         "title": "更新日誌"
     },
     "chartSelect": {
+        "play": "遊玩",
+        "chapters": {
+            "favorites": "收藏"
+        },
         "jumpto": "請輸入您要跳轉的頁碼 (1 - {0})",
         "inputDosentMatchRequirement": "您的輸入不合法",
         "favourites": {
@@ -178,7 +182,7 @@
         "thisSongHasNoPlayableCharts": "該歌曲暫無可遊玩譜面！",
         "chartSelect": "譜面選擇",
         "config": "遊玩配置",
-        "chartListIsEmptyOffline": "沒有可離線遊玩的快取譜面。請先到「譜面管理」下載譜面。",
+        "chartListIsEmptyOffline": "沒有可離線遊玩的快取譜面。請先連網下載譜面。",
         "chartListIsEmptyFavorite": "暫無已收藏的譜面",
         "goDownloadCharts": "去下載譜面"
     },

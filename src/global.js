@@ -967,6 +967,39 @@ const ptAppInstance = createApp({
             };
             this.noAccountMode = true;
         },
+        async clearLocalData(t) {
+            // 原谱面管理页的「高级清理」，现居设置页
+            const ok = await msgHandler.confirm(
+                this.$t("chartManage.confirmClear"),
+                this.$t("chartManage.dangerTitle"),
+                this.$t("info.delete"),
+                this.$t("info.cancel")
+            );
+            if (!ok) return;
+            switch (t) {
+                case "charts":
+                    window.caches.delete("PTv0-Charts").then(async () => {
+                        await indexedDB.deleteDatabase("PTv0");
+                        location.reload();
+                    });
+                    break;
+                case "self":
+                    window.caches.delete("PTv0-Main").then(() => {
+                        location.reload();
+                    });
+                    break;
+                case "all":
+                    window.caches.delete("PTv0-Main").then(() => {
+                        window.caches.delete("PTv0-Charts").then(() => {
+                            window.caches.delete("PTv0-User").then(async () => {
+                                await indexedDB.deleteDatabase("PTv0");
+                                msgHandler.success(this.$t("chartManage.clearOk"));
+                            });
+                        });
+                    });
+                    break;
+            }
+        },
         update() {
             caches.delete("PTv0-Main").then(() => {
                 const url = `/#${

@@ -268,12 +268,6 @@
                 <input
                     class="blur startBtn btn-smooth"
                     type="button"
-                    :value="$t('startPage.chartManage')"
-                    @click="to('/chartManage')"
-                />
-                <input
-                    class="blur startBtn btn-smooth"
-                    type="button"
                     :value="$t('startPage.replay')"
                     @click="to('/replayPage')"
                 />

@@ -1,33 +1,47 @@
 <script>
     import shared from "@utils/js/shared.js";
     import { audio } from "@utils/js/aup";
-    import { partyMgr } from "@utils/js/partyMgr";
     import ptdb from "@components/ptdb";
     import ploading from "@utils/js/ploading.js";
+    import { authFetch } from "@utils/serverApi";
+    import { chartDownloadQueue } from "@utils/chartDownloadQueue";
     import {
         formatChartLevel,
-        getLocalSongGroupKey,
         mergeLocalSongCharts,
     } from "@utils/localChartGrouping.mjs";
+
+    // 单人游戏：Phigros 式章节选曲，统一「浏览 / 下载 / 游玩」。
+    // 客户端只拉取服务端谱面资源列表（含章节归属），.pez 资源按需下载；
+    // 曲绘懒加载，无音频预览。难度徽章双态：未下载 → 下载，已下载 → 开玩。
+    // 章节划分数据来自 server/tools/phigros_chapters.json（拉谱脚本写入 meta），
+    // 无章节归属与自定义上传的谱面归入「其他」。
+    const LEVEL_COLORS = {
+        EZ: "#3ba55d",
+        HD: "#2f7fd3",
+        IN: "#d34040",
+        AT: "#8e44d3",
+        SP: "#7a8288",
+    };
+
     export default {
         name: "chartSelect",
         data() {
             return {
-                search: {
-                    name: "",
-                    composer: "",
-                    illustrator: "",
-                },
-                chartList: {},
-                beforeSearch: [],
-                beforePagination: [],
-                page: 1,
-                toPage: null,
-                showMoreSearchQueryInput: false,
-                selectChoice: "local",
-                forceOffline: false,
-                selectedSongData: null,
-                selectedPlayingSettings: {
+                search: "",
+                selectedChapter: "",
+                chapters: [],
+                serverFiles: [],
+                localSongs: [],
+                importedIndex: {},
+                queueItems: [],
+                paused: false,
+                expandedKey: null,
+                favouriteSongs: [],
+                coverUrls: {},
+                loadError: "",
+                loading: false,
+                settingsOpen: false,
+                playSettings: {
                     speed: "",
                     mirror: false,
                     practiseMode: false,
@@ -35,605 +49,486 @@
                     adjustOffset: false,
                     videoRecorder: false,
                 },
-                ct: {},
-                toSyncOrPlay: 0,
-                scrolledTop: 0,
-                configDialogOpened: false,
-                chartSelectorOpenedTab: "chartSelect", // chartSelect config
-                canEdit: false,
-                favouriteSongs: [],
-                showBlank: false,
-                loadingImages: new Map(),
-                imageCache: new Map(),
+                forceOffline: false,
             };
         },
         computed: {
-            isPTApp() {
-                return window.spec.isPhiTogetherApp;
+            pendingCount() {
+                return this.queueItems.filter(
+                    i => i.status === "queued" || i.status === "downloading" || i.status === "importing"
+                ).length;
             },
-            canPrev() {
-                if (this.selectChoice === "favorite") return this.chartList.hasPrevious;
-                return this.page - 1 > 0;
+            localById() {
+                const map = {};
+                for (const song of this.localSongs) map[String(song.id)] = song;
+                return map;
             },
-            canNext() {
-                if (this.selectChoice === "favorite") return this.chartList.hasNext;
-                return this.page + 1 <= this.pageAll;
-            },
-            pageAll() {
-                try {
-                    if (this.selectChoice === "favorite") {
-                        const count = this.chartList.total;
-                        if (count) {
-                            return Math.ceil(count / 32);
-                        } else return 1;
+            // 服务端条目 + 本地缓存 合并成「一曲一行」的分组模型
+            songGroups() {
+                const groups = {};
+                const ensure = (key, base) => {
+                    if (!groups[key]) {
+                        groups[key] = {
+                            key,
+                            name: base.name || "",
+                            composer: base.composer || "",
+                            illustrator: base.illustrator || "",
+                            cover: base.cover || null,
+                            chapter: base.chapter || "",
+                            chapterOrder:
+                                typeof base.chapterOrder === "number" ? base.chapterOrder : 999,
+                            localSongId: null,
+                            localSong: null,
+                            diffs: [],
+                        };
                     }
-                    const count = this.beforePagination.length;
-                    if (count) {
-                        return Math.ceil(count / 32);
-                    } else return 1;
-                } catch (e) {
-                    return 1;
+                    return groups[key];
+                };
+
+                for (const file of this.serverFiles) {
+                    const key = file.song_id || "file:" + file.name;
+                    const group = ensure(key, {
+                        name: file.song_name,
+                        composer: file.composer,
+                        illustrator: file.illustrator,
+                        cover: file.cover,
+                        chapter: file.chapter,
+                        chapterOrder: file.chapter_order,
+                    });
+                    const link = this.importedIndex[file.name] || null;
+                    const localSong = link && link.songId ? this.localById[String(link.songId)] : null;
+                    let localChart = null;
+                    if (localSong) {
+                        const charts = localSong.charts || [];
+                        if (link.chartId)
+                            localChart =
+                                charts.find(c => String(c.id) === String(link.chartId)) || null;
+                        if (!localChart) {
+                            const lv = String(file.level || "").toUpperCase();
+                            if (lv)
+                                localChart =
+                                    charts.find(c => String(c.level || "").toUpperCase() === lv) ||
+                                    null;
+                        }
+                        group.localSongId = String(link.songId);
+                        group.localSong = localSong;
+                    }
+                    group.diffs.push({
+                        key: "s:" + file.name,
+                        level: String(file.level || "").toUpperCase() || "SP",
+                        rating: Number(file.rating) || 0,
+                        charter: file.charter || "",
+                        file,
+                        link,
+                        localChart,
+                        outdated: !!(link && localSong && link.size !== file.size),
+                    });
                 }
+
+                for (const song of this.localSongs) {
+                    const songId = String(song.id);
+                    let merged = false;
+                    for (const key in groups) {
+                        if (groups[key].localSongId === songId) {
+                            merged = true;
+                            break;
+                        }
+                    }
+                    if (merged) continue;
+                    const group = ensure("local:" + songId, {
+                        name: song.name,
+                        composer: song.composer,
+                        illustrator: song.illustrator,
+                    });
+                    group.localSongId = songId;
+                    group.localSong = song;
+                    for (const chart of song.charts || []) {
+                        group.diffs.push({
+                            key: "c:" + chart.id,
+                            level: String(chart.level || "").toUpperCase() || "SP",
+                            rating: Number(chart.difficulty) || 0,
+                            charter: chart.charter || "",
+                            file: null,
+                            link: null,
+                            localChart: chart,
+                            outdated: false,
+                        });
+                    }
+                }
+
+                return Object.values(groups);
             },
-            isSingle() {
-                return shared.game.ptmain.gameMode === "single";
+            // 章节条：收藏 + 有内容的章节 + 固定的 单曲精选集/隐秘/其他
+            chapterItems() {
+                const fixed = ["单曲精选集", "隐秘", "其他"];
+                const byChapter = new Map();
+                for (const group of this.songGroups) {
+                    const name = group.chapter || "其他";
+                    if (!byChapter.has(name)) byChapter.set(name, []);
+                    byChapter.get(name).push(group);
+                }
+                const items = [];
+                const favGroups = this.songGroups.filter(g => this.isFavourite(g));
+                if (favGroups.length)
+                    items.push({
+                        id: "__fav__",
+                        name: this.$t("chartSelect.chapters.favorites"),
+                        groups: favGroups,
+                    });
+                for (const chapter of this.chapters) {
+                    const groups = byChapter.get(chapter.name) || [];
+                    if (!groups.length && !fixed.includes(chapter.name)) continue;
+                    items.push({
+                        id: chapter.id || chapter.name,
+                        name: chapter.name,
+                        groups: groups.slice().sort((a, b) => a.name.localeCompare(b.name, "zh")),
+                    });
+                }
+                // 章节表之外的（手动 pez / 本地上传）统一归入「其他」
+                const known = new Set(this.chapters.map(c => c.name));
+                const rest = this.songGroups.filter(g => !known.has(g.chapter) && g.chapter !== "");
+                const other = byChapter.get("其他") || [];
+                const mergedOther = [...other, ...rest.filter(r => !other.includes(r))];
+                const otherItem = items.find(i => i.name === "其他");
+                if (otherItem) {
+                    otherItem.groups = mergedOther
+                        .slice()
+                        .sort((a, b) => a.name.localeCompare(b.name, "zh"));
+                } else if (mergedOther.length) {
+                    items.push({ id: "other", name: "其他", groups: mergedOther });
+                }
+                // 本地导入的谱面没有服务端章节，归「其他」
+                for (const item of items) {
+                    for (const g of item.groups) {
+                        if (!g.chapter && item.name !== "其他") {
+                            /* 保持原分组 */
+                        }
+                    }
+                }
+                return items;
             },
-            canFav() {
-                return !!this.selectedSongData;
-            },
-            isMulti() {
-                return shared.game.ptmain.gameMode === "multi";
-            },
-            // 离线且本地无缓存谱面时，给出更有引导性的空状态提示。
-            isEmptyOffline() {
+            currentChapter() {
+                if (!this.chapterItems.length) return null;
                 return (
-                    this.forceOffline ||
-                    (!navigator.onLine && this.selectChoice === "local")
+                    this.chapterItems.find(i => i.id === this.selectedChapter) || this.chapterItems[0]
                 );
             },
+            visibleSongs() {
+                const chapter = this.currentChapter;
+                if (!chapter) return [];
+                let list = chapter.groups;
+                const query = this.search.trim().toLowerCase();
+                if (query) {
+                    list = list.filter(g =>
+                        [g.name, g.composer, g.illustrator]
+                            .join(" ")
+                            .toLowerCase()
+                            .includes(query)
+                    );
+                }
+                if (this.forceOffline) list = list.filter(g => g.diffs.some(d => d.localChart));
+                return list;
+            },
         },
-        async mounted() {
-            if (this.$route.query.offline == 1) {
-                this.forceOffline = true;
-            }
-            this.loadOffline();
+        methods: {
+            formatSize(size) {
+                if (!size && size !== 0) return "";
+                if (size >= 1024 * 1024) return (size / 1024 / 1024).toFixed(1) + " MB";
+                return Math.max(1, Math.round(size / 1024)) + " KB";
+            },
+            levelColor(level) {
+                return LEVEL_COLORS[level] || LEVEL_COLORS.SP;
+            },
+            ratingText(diff) {
+                return diff.rating ? String(diff.rating) : "?";
+            },
+            isFavourite(group) {
+                return (
+                    this.favouriteSongs.includes(group.key) ||
+                    (!!group.localSongId && this.favouriteSongs.includes(group.localSongId))
+                );
+            },
+            toggleFavourite(group) {
+                const on = this.isFavourite(group);
+                if (on) {
+                    this.favouriteSongs = this.favouriteSongs.filter(
+                        i => i !== group.key && i !== group.localSongId
+                    );
+                } else {
+                    this.favouriteSongs = [...this.favouriteSongs, group.key];
+                }
+                ptdb.gameConfig.save(this.favouriteSongs, "favouriteSongs");
+                shared.game.msgHandler.sendMessage(
+                    on
+                        ? this.$t("chartSelect.favourites.removedSuccessfully", [group.name])
+                        : this.$t("chartSelect.favourites.addedSuccessfully", [group.name])
+                );
+            },
+            queueItemOf(diff) {
+                return diff.file ? this.queueItems.find(i => i.name === diff.file.name) || null : null;
+            },
+            diffState(diff) {
+                const item = this.queueItemOf(diff);
+                if (item) {
+                    if (item.status === "downloading" || item.status === "importing")
+                        return { kind: "busy", item };
+                    if (item.status === "queued") return { kind: "queued", item };
+                    if (item.status === "failed") return { kind: "failed", item };
+                }
+                if (diff.localChart) return { kind: "done", item };
+                if (diff.file && diff.file.valid === false) return { kind: "broken", item };
+                return { kind: "idle", item };
+            },
+            onBadge(group, diff) {
+                const state = this.diffState(diff);
+                if (state.kind === "idle" && diff.file) this.downloadDiff(diff);
+                else if (state.kind === "done") this.playDiff(group, diff);
+                else this.expandedKey = this.expandedKey === group.key ? null : group.key;
+            },
+            downloadDiff(diff) {
+                if (!diff.file || diff.file.valid === false) return;
+                chartDownloadQueue.enqueue([diff.file]);
+            },
+            retryItem(diff) {
+                const item = this.queueItemOf(diff);
+                if (item) chartDownloadQueue.retry(item.name);
+            },
+            async updateDiff(diff) {
+                if (!diff.file || diff.file.valid === false) return;
+                await this.deleteDiffSilent(diff);
+                chartDownloadQueue.enqueue([diff.file]);
+            },
+            async deleteDiff(group, diff) {
+                const ok = await shared.game.msgHandler.confirm(
+                    this.$t("chartManage.confirmBeforeDelete")
+                );
+                if (!ok) return;
+                await this.deleteDiffSilent(diff);
+                shared.game.msgHandler.sendMessage(this.$t("chartManage.deleted"));
+                await this.refreshAll();
+            },
+            async deleteDiffSilent(diff) {
+                if (diff.localChart) {
+                    await ptdb.chart.chart.delete(diff.localChart.id).catch(() => {});
+                }
+                if (diff.file) await chartDownloadQueue.unlinkFile(diff.file.name);
+            },
+            async deleteSongGroup(group) {
+                const ok = await shared.game.msgHandler.confirm(
+                    this.$t("chartManage.confirmDeleteGroup", [
+                        group.name || this.$t("chartManage.unnamed"),
+                    ])
+                );
+                if (!ok) return;
+                for (const diff of group.diffs) await this.deleteDiffSilent(diff);
+                if (group.localSongId) {
+                    await ptdb.chart.song.delete(group.localSongId).catch(() => {});
+                    await chartDownloadQueue.unlinkSong(group.localSongId);
+                }
+                shared.game.msgHandler.sendMessage(this.$t("chartManage.deleted"));
+                this.expandedKey = null;
+                await this.refreshAll();
+            },
+
+            // ===== 游玩：与旧选曲页一致的 loadChart/playChart 链路 =====
+            playDiff(group, diff) {
+                const songMeta = group.localSong;
+                const chartMeta = diff.localChart;
+                if (!songMeta || !chartMeta) return;
+                shared.game.ptmain.playConfig = JSON.parse(JSON.stringify(this.playSettings));
+                if (this.playSettings.previewMode || this.playSettings.adjustOffset) {
+                    shared.game.ptmain.playConfig.practiseMode = true;
+                    shared.game.ptmain.playConfig.mode = "preview";
+                } else {
+                    shared.game.ptmain.playConfig.mode = "play";
+                }
+                ploading.l(this.$t("chartSelect.loadingChart"), "loadChart");
+                shared.game.ptmain.loadChart(songMeta, chartMeta, this.chartLoaded);
+            },
+            chartLoaded() {
+                if (this.$route.path !== "/chartSelect") return;
+                ploading.r("loadChart");
+                audio.stop();
+                shared.game.ptmain.playChart();
+            },
+            bestScoreOf(chart) {
+                const records = shared.game.ptmain.gameConfig.ptBestRecords || {};
+                const data = records[chart && chart.id];
+                if (!data || data[3]) return null;
+                return { score: data[0], acc: data[1], isFc: data[2] };
+            },
+            scoreBadge(score) {
+                if (!score) return null;
+                const s = score.score;
+                return s === 1000000
+                    ? "φ"
+                    : score.isFc
+                      ? "V"
+                      : s >= 960000
+                        ? "V"
+                        : s >= 920000
+                          ? "S"
+                          : s >= 880000
+                            ? "A"
+                            : s >= 820000
+                              ? "B"
+                              : s >= 700000
+                                ? "C"
+                                : "F";
+            },
+
+            // ===== 数据装载 =====
+            async loadServerList() {
+                if (this.forceOffline) return;
+                this.loading = true;
+                this.loadError = "";
+                try {
+                    const resp = await authFetch("/api/game/charts");
+                    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                    const data = await resp.json();
+                    this.serverFiles = data.charts || [];
+                    this.chapters = data.chapters || [];
+                } catch (e) {
+                    this.loadError = e.message || this.$t("chartManage.loadFailed");
+                    this.serverFiles = [];
+                } finally {
+                    this.loading = false;
+                }
+            },
+            async loadLocal() {
+                try {
+                    const resp = await ptdb.chart.renderApi();
+                    this.localSongs = mergeLocalSongCharts(resp.results || []);
+                } catch {
+                    this.localSongs = [];
+                }
+            },
+            async loadImported() {
+                this.importedIndex = await chartDownloadQueue.getImportedIndex();
+            },
+            async refreshAll() {
+                this.loading = true;
+                await Promise.all([this.loadImported(), this.loadLocal()]);
+                await this.loadServerList();
+                this.loading = false;
+                if (
+                    this.selectedChapter &&
+                    !this.chapterItems.some(i => i.id === this.selectedChapter)
+                ) {
+                    this.selectedChapter = "";
+                }
+            },
+            refreshQueue() {
+                this.queueItems = chartDownloadQueue.items.map(i => ({ ...i }));
+                this.paused = chartDownloadQueue.paused;
+            },
+
+            // ===== 曲绘懒加载 =====
+            async ensureCover(key, coverUrl, localSongId) {
+                if (this.coverUrls[key] !== undefined) return;
+                this.coverUrls[key] = "";
+                let url = "";
+                try {
+                    if (coverUrl) {
+                        const sep = coverUrl.includes("?") ? "&" : "?";
+                        const resp = await authFetch(coverUrl + sep + "nocache=nocache");
+                        if (resp.ok) url = URL.createObjectURL(await resp.blob());
+                    } else if (localSongId) {
+                        const song = this.localById[String(localSongId)];
+                        const virtual = song && song.illustration;
+                        if (virtual) {
+                            const resp = await ptdb.fetch(virtual);
+                            if (resp.ok) url = URL.createObjectURL(await resp.blob());
+                        }
+                    }
+                } catch {
+                    url = "";
+                }
+                this.coverUrls[key] = url;
+            },
+            observeRows() {
+                if (!this._observer || !this.$el) return;
+                const rows = this.$el.querySelectorAll("[data-coverkey]:not([data-observed])");
+                for (const row of rows) {
+                    row.setAttribute("data-observed", "1");
+                    this._observer.observe(row);
+                }
+            },
+            coverInitial(name) {
+                return (name || "?").trim().charAt(0).toUpperCase();
+            },
         },
-        activated() {
+        async activated() {
             audio.stop();
-            stage.style.display = "none";
-            this.showBlank = false;
-
-            if (this.chartList && this.selectedSongData) {
-                const indexOfSelectedChart = this.chartList.results.indexOf(this.selectedSongData);
-                const page = this.page;
-                this.selectedSongData = null;
-                (() => {
-                    if (this.selectChoice === "favorite") return this.loadFavouriteSongs();
-                    return this.loadOffline().then(() => {
-                        this.page = page;
-                        this.updatePagination();
-                    });
-                })()
-                    .then(() => this.goDetails(this.chartList.results[indexOfSelectedChart]))
-                    .catch(e => (this.showBlank = false));
+            if (window.stage) window.stage.style.display = "none";
+            this._seenDone = new Set(
+                chartDownloadQueue.items.filter(i => i.status === "done").map(i => i.name)
+            );
+            this.refreshQueue();
+            await this.refreshAll();
+        },
+        mounted() {
+            if (this.$route.query.offline == 1) this.forceOffline = true;
+            this._seenDone = new Set(
+                chartDownloadQueue.items.filter(i => i.status === "done").map(i => i.name)
+            );
+            this._unsubscribe = chartDownloadQueue.subscribe(() => {
+                this.refreshQueue();
+                let changed = false;
+                for (const item of chartDownloadQueue.items) {
+                    if (item.status === "done") {
+                        if (!this._seenDone.has(item.name)) {
+                            this._seenDone.add(item.name);
+                            changed = true;
+                        }
+                    } else {
+                        this._seenDone.delete(item.name);
+                    }
+                }
+                if (changed) {
+                    this.loadImported();
+                    this.loadLocal();
+                }
+            });
+            if (typeof IntersectionObserver !== "undefined") {
+                this._observer = new IntersectionObserver(
+                    entries => {
+                        for (const en of entries) {
+                            if (!en.isIntersecting) continue;
+                            const el = en.target;
+                            const key = el.getAttribute("data-coverkey");
+                            if (key)
+                                this.ensureCover(
+                                    key,
+                                    el.getAttribute("data-coverurl"),
+                                    el.getAttribute("data-localsong")
+                                );
+                            this._observer.unobserve(el);
+                        }
+                    },
+                    { rootMargin: "300px 0px" }
+                );
             }
-
-            if (this.$route.query.toSyncOrPlay && this.$route.query.toSyncOrPlay == 3) {
-                this.selectChoice = "empty";
-                const ct = JSON.parse(sessionStorage.getItem("loadedChart"));
-                this.ct = ct;
-                this.toSyncOrPlay = 3;
-                // TODO
-                // this.loadChart(ct);
-                return;
-            }
-            if (this.selectChoice === "empty") {
-                this.selectedSongData = null;
-                this.selectChoice = "local";
-                this.loadOffline();
-            }
-            if (this.selectedSongData) this.playPreview(this.selectedSongData);
-            this.toSyncOrPlay = 0;
-            this.ct = null;
-            if (!navigator.onLine && !this.forceOffline && this.selectChoice !== "local")
-                (this.forceOffline = true), this.loadOffline();
-            if (["local"].includes(this.selectChoice)) this.loadOffline();
-            const d = document.querySelector("#songSelectList");
-            d && (d.scrollTop = this.scrolledTop);
-
             ptdb.gameConfig
                 .get("favouriteSongs", [])
-                .then(favouriteSongs => (this.favouriteSongs = favouriteSongs))
-                .catch(e => e);
+                .then(v => (this.favouriteSongs = v))
+                .catch(() => {});
+            this.refreshAll();
+        },
+        updated() {
+            this.observeRows();
         },
         deactivated() {
             audio.stop();
             ploading.r();
             ploading.r("loadChart");
         },
-        unmounted() {
-            this.clearImageCache();
-        },
-        beforeRouteLeave(to, from, next) {
-            this.scrolledTop = document.querySelector("#songSelectList")
-                ? document.querySelector("#songSelectList").scrollTop
-                : 0;
-            next();
-        },
-        methods: {
-            processIllustrationURL(i) {
-                let d = i.split("/");
-                let idx = d.length - 1;
-                d[idx] = encodeURIComponent(d[idx]).replace("(", "\\(").replace(")", "\\)");
-                return d.join("/");
-            },
-            back2song() {
-                this.showBlank = false;
-                document.querySelector("#songSelectList").scrollTop = this.scrolledTop;
-                this.selectedSongData = null;
-                audio.stop();
-            },
-            async goJustPageAsk() {
-                const res = await shared.game.msgHandler.prompt(
-                    this.$t("chartSelect.jumpto", [this.pageAll])
-                );
-                if (res) this.goJustPage(res);
-            },
-            goJustPage(i) {
-                if (!(i >= 1 && i <= this.pageAll)) {
-                    shared.game.msgHandler.sendMessage(
-                        this.$t("chartSelect.inputDosentMatchRequirement"),
-                        "error"
-                    );
-                    return;
-                }
-                if (this.selectChoice === "favorite") return;
-                this.page = i;
-                this.updatePagination();
-            },
-            loadPrevPage() {
-                if (this.selectChoice === "favorite") return;
-                this.page = this.page - 1;
-                this.updatePagination();
-            },
-            loadNextPage() {
-                if (this.selectChoice === "favorite") return;
-                this.page = this.page + 1;
-                this.updatePagination();
-            },
-            updatePagination() {
-                if (this.page < 1) this.page = 1;
-                if (this.page > this.pageAll) this.page = this.pageAll;
-                this.chartList = {
-                    results: this.beforePagination
-                        ? this.beforePagination.slice(32 * this.page - 32, 32 * this.page)
-                        : [],
-                };
-                if (this.selectChoice === "local") {
-                    const selectedKey = this.selectedSongData
-                        ? getLocalSongGroupKey(this.selectedSongData)
-                        : null;
-                    const selectedSong =
-                        this.chartList.results.find(
-                            song => getLocalSongGroupKey(song) === selectedKey
-                        ) || this.chartList.results[0];
-                    if (selectedSong) {
-                        this.goDetails(selectedSong, false).catch(() => (this.showBlank = false));
-                    } else {
-                        this.selectedSongData = null;
-                        audio.stop();
-                    }
-                }
-            },
-            async loadOffline() {
-                if (this.forceOffline && this.selectChoice !== "favorite")
-                    this.selectChoice = "local";
-                // 服务端谱面不再自动全量下载（慢且无进度），改由「谱面下载」页面
-                // （/chartManage）按需选择下载；此处只读本地 IndexedDB 缓存，离线可用。
-                let { results } = await ptdb.chart.renderApi();
-                let newlist = [];
-                for (const t of results) {
-                    if (t.song && t.illustration && t.charts) newlist.push(t);
-                }
-                this.beforeSearch = mergeLocalSongCharts(newlist);
-                this.beforePagination = this.beforeSearch;
-                this.updatePagination();
-            },
-            async goDetails(para, allowAutoScroll = true) {
-                if (this.selectedSongData === para) return;
-                const autoScroll = allowAutoScroll && !this.selectedSongData;
-                if (!para.charts || !para.charts.length) para.charts = [];
-                sessionStorage.setItem("chartDetailsData", JSON.stringify(para));
-                ptdb.chart.song.has(para.id).then(h => (this.canEdit = h));
-                if (autoScroll) {
-                    const songList = document.querySelector("#songSelectList");
-                    if (songList) {
-                        this.scrolledTop = songList.scrollTop;
-                        songList.scrollTop =
-                            Math.max((0.39275 * window.innerWidth - 2) * 0.2 + 2, 100) *
-                            this.chartList.results.indexOf(para);
-                    }
-                    // setTimeout(() => document.querySelector("#songSelectList").scrollTop = Math.max(0.08 * window.innerWidth, 100) * this.chartList.results.indexOf(para), 100);
-                }
-                this.selectedSongData = para;
-                this.selectChart(para.charts[0]);
-                audio.stop();
-                this.playPreview(para);
-            },
-            async playPreview(para) {
-                this.previewAbortController = new AbortController();
-                ptdb.chart.song
-                    .fetch(para, {
-                        signal: this.previewAbortController.signal,
-                    })
-                    .then(async e => {
-                        audio.stop();
-                        const buffer = await e.arrayBuffer();
-                        const bfs = await audio.decode(buffer);
-                        if (
-                            this.selectedSongData.id !== para.id ||
-                            this.$route.path !== "/chartSelect"
-                        )
-                            return;
-                        audio.play(bfs, {
-                            loop: true,
-                            offset: this.toSecond(para.preview_start || 0),
-                            singleAudioAllowed: true,
-                            gainrate: 0,
-                            gainrateTo: 1,
-                            gainrateToTime: 5,
-                        });
-                        // shared.game.msgHandler.sendMessage("正在播放音频预览...");
-                        this.previewAbortController = null;
-                    })
-                    .catch(e => {
-                        if (this.previewAbortController)
-                            shared.game.msgHandler.sendMessage(
-                                this.$t("chartSelect.previewLoadFailed"),
-                                "error"
-                            );
-                        if (import.meta.env.DEV) console.error(e);
-                    });
-            },
-            doSearch() {
-                if (partyMgr.list.aprfool2024.hook(this.search, this.loadChart)) return;
-                if (this.selectChoice === "favorite") {
-                    if (!this.chartList.resultsbak)
-                        this.chartList.resultsbak = this.chartList.results;
-                    this.chartList.results = this.chartList.resultsbak.filter(i =>
-                        i.name.toLowerCase().includes(this.search.name.toLowerCase())
-                    );
-                } else {
-                    this.beforePagination = this.beforeSearch.filter(x => {
-                        return (
-                            x.name.toLowerCase().includes(this.search.name.toLowerCase()) &&
-                            x.composer.toLowerCase().includes(this.search.composer.toLowerCase()) &&
-                            x.illustrator
-                                .toLowerCase()
-                                .includes(this.search.illustrator.toLowerCase())
-                        );
-                    });
-                    this.page = 1;
-                    this.updatePagination();
-                }
-            },
-            toggleInput() {
-                this.showMoreSearchQueryInput = !this.showMoreSearchQueryInput;
-            },
-            async loadFavouriteSongs() {
-                ploading.l(this.$t("chartSelect.loadingChartList"));
-                this.page = 1;
-                const chartList = {
-                    total: 0,
-                    perPage: 114514,
-                    hasPrevious: false,
-                    hasNext: false,
-                    results: [],
-                };
-                chartList.results = await ptdb.chart
-                    .renderApi()
-                    .then(resp => resp.results)
-                    .then(results =>
-                        results.filter(result => this.favouriteSongs.includes(result.id))
-                    );
-                this.chartList = chartList;
-                document.querySelector("#app").scrollTop = 0;
-                ploading.r();
-            },
-            getDifficultyActual(chartInfo) {
-                if (typeof chartInfo.difficulty === "string" || !chartInfo.difficulty)
-                    return chartInfo.difficulty;
-                else return chartInfo.difficulty === 0 ? "?" : Math.floor(chartInfo.difficulty);
-            },
-            formatChartLevel,
-            toSecond(str) {
-                try {
-                    const d = str.split(":");
-                    return d[0] * 3600 + d[1] * 60 + d[2] * 1;
-                } catch (e) {
-                    return 0;
-                }
-            },
-            cleanStr(i) {
-                return i.replace(
-                    new RegExp(
-                        [
-                            ...i.matchAll(
-                                new RegExp(
-                                    "\\[PZ([A-Za-z]+):([0-9]+):((?:(?!:PZRT]).)*):PZRT\\]",
-                                    "g"
-                                )
-                            ),
-                        ].length === 0
-                            ? "\\[PZ([A-Za-z]+):([0-9]+):([^\\]]+)\\]" // legacy support
-                            : "\\[PZ([A-Za-z]+):([0-9]+):((?:(?!:PZRT]).)*):PZRT\\]",
-                        "gi"
-                    ),
-                    "$3"
-                );
-            },
-            getLevelColor(levelText) {
-                levelText = levelText.trim().toUpperCase().split(/\s+/)[0];
-                if (levelText === "IN") return "#d31314";
-                if (levelText === "AT") return "#443";
-                if (levelText === "HD") return "#2bf";
-                if (levelText === "EZ") return "#5d0";
-                return "#00dddd";
-            },
-            selectChart(chart) {
-                if (!chart) return;
-                for (const chart of this.selectedSongData.charts) chart.selected = false;
-                if (!chart.userScore) {
-                    if (!shared.game.ptmain.gameConfig.ptBestRecords)
-                        shared.game.ptmain.gameConfig.ptBestRecords = {};
-                    const scoreData = shared.game.ptmain.gameConfig.ptBestRecords[chart.id] || [
-                        0,
-                        0,
-                        false,
-                        true,
-                    ];
-                    if (!scoreData[3]) {
-                        const score = scoreData[0];
-                        chart.userScore = [
-                            score === 1000000
-                                ? ["φ", "goldenrod", "50px", -1]
-                                : scoreData[2]
-                                  ? ["V", "deepskyblue", "50px", -1]
-                                  : score >= 960000
-                                    ? ["V", "gray", "50px", -1]
-                                    : score >= 920000
-                                      ? ["S", "gray", "50px", -1]
-                                      : score >= 880000
-                                        ? ["A", "gray", "50px", -1]
-                                        : score >= 820000
-                                          ? ["B", "gray", "50px", -1]
-                                          : score >= 700000
-                                            ? ["C", "gray", "50px", -1]
-                                            : ["F", "gray", "50px", -1],
-                            this.scoreStr(scoreData[0]),
-                            `${(scoreData[1] * 100).toFixed(2)}%`,
-                        ];
-                    } else {
-                        chart.userScore = [["NEW", "gray", "15px", 0.6], "0000000", "0.00%"];
-                    }
-                }
-                chart.selected = true;
-            },
-            async loadChart(ct) {
-                if (partyMgr.list.aprfool2024.hookCheckRT(ct.id)) return;
-                const localCharts = {
-                    "c9e42da0-2149-4037-98be-e50070be9ad6": {
-                        type: "pgm",
-                        link: "/src/core/charts/pgm/c22in.json",
-                    },
-                };
-                if (ct.id && ct.id in localCharts) {
-                    const ctpr = localCharts[ct.id];
-                    ct.chart = ctpr.link;
-                    switch (ctpr.type) {
-                        case "pgm":
-                            await shared.game.msgHandler.info(this.$t("chartSelect.pgmChartNote"));
-                            break;
-                        default:
-                            break;
-                    }
-                }
-                if (!ct.chart) {
-                    shared.game.msgHandler.failure(
-                        this.$t("chartSelect.unableToSelectDueToCopyrightReasons")
-                    );
-                    return;
-                }
-                if (this.previewAbortController)
-                    this.previewAbortController.abort(), (this.previewAbortController = null);
-                this.ct = ct;
-                if (shared.game.ptmain.gameMode === "multi") {
-                    if (
-                        shared.game.multiInstance.owner &&
-                        shared.game.multiInstance.room.stage === 1
-                    ) {
-                        audio.stop();
-                        this.multiSyncChart();
-                        return;
-                    } else return;
-                }
-                if (shared.game.ptmain.gameMode !== "multi") {
-                    shared.game.ptmain.playConfig = JSON.parse(
-                        JSON.stringify(this.selectedPlayingSettings)
-                    );
-                    if (
-                        this.selectedPlayingSettings.previewMode ||
-                        this.selectedPlayingSettings.adjustOffset
-                    ) {
-                        shared.game.ptmain.playConfig.practiseMode = true;
-                        shared.game.ptmain.playConfig.mode = "preview";
-                    } else shared.game.ptmain.playConfig.mode = "play";
-                } else shared.game.ptmain.playConfig = {};
-                ploading.l(this.$t("chartSelect.loadingChart"), "loadChart");
-                shared.game.ptmain.loadChart(this.selectedSongData, ct, this.chartLoaded);
-            },
-            chartLoaded(songInfo, chartInfo) {
-                if (this.$route.path !== "/chartSelect") return;
-                if (shared.game.ptmain.gameMode !== "multi") {
-                    this.toSyncOrPlay = 1;
-                    ploading.r("loadChart");
-                    audio.stop();
-                    if (this.selectedSongData.unlockVideo)
-                        this.showUnlockVideo().then(this.playChart);
-                    else this.playChart();
-                }
-            },
-            async playChart() {
-                shared.game.ptmain.playChart();
-            },
-            edit() {
-                this.$router.push({
-                    path: "/chartEdit",
-                });
-            },
-            async deleteChart() {
-                if (
-                    !(await shared.game.msgHandler.confirm(
-                        this.$t("chartManage.confirmBeforeDelete")
-                    ))
-                )
-                    return;
-                // this.deleteCacheAll(this.selectedSongData);
-                ptdb.chart.song.delete(this.selectedSongData.id);
-                for (const chart of this.selectedSongData.charts) ptdb.chart.chart.delete(chart.id);
-
-                this.selectedSongData = null;
-                audio.stop();
-                /* if (this.selectChoice === "local")  */ this.loadOffline();
-            },
-            scoreStr(t) {
-                const a = Math.round(t);
-                return "0".repeat(a.length < 7 ? 7 - a.length : 0) + a;
-            },
-            async favourite() {
-                if (this.favouriteSongs.includes(this.selectedSongData.id)) {
-                    this.favouriteSongs = this.favouriteSongs.filter(
-                        item => item !== this.selectedSongData.id
-                    );
-                    shared.game.msgHandler.sendMessage(
-                        this.$t("chartSelect.favourites.removedSuccessfully", [
-                            this.selectedSongData.name,
-                        ])
-                    );
-                } else {
-                    this.favouriteSongs.push(this.selectedSongData.id);
-                    shared.game.msgHandler.sendMessage(
-                        this.$t("chartSelect.favourites.addedSuccessfully", [
-                            this.selectedSongData.name,
-                        ])
-                    );
-                }
-            },
-            async multiSyncChart() {
-                try {
-                    ploading.l(this.$t("chartSelect.multiSyncChart.sync"), "syncChart");
-                    await shared.game.multiInstance.syncChart(
-                        this.selectedSongData,
-                        this.ct,
-                        this.selectedPlayingSettings.speed
-                    );
-                    this.toSyncOrPlay = 3;
-                } catch (e) {
-                    ploading.r("syncChart");
-                    shared.game.msgHandler.sendMessage(
-                        this.$t("chartSelect.multiSyncChart.failed"),
-                        "error"
-                    );
-                }
-            },
-            showUnlockVideo() {
-                return new Promise(res => {
-                    if (
-                        !this.selectedSongData.unlockVideo ||
-                        localStorage.getItem(this.selectedSongData.id + "_Unlocked") ||
-                        document.querySelector(".main > video")
-                    )
-                        return res();
-                    const main = document.querySelector(".main");
-                    // const videoContainer = document.createElement("div");
-                    // videoContainer.style.zIndex = 1145141919810;
-                    // videoContainer.style += ";position:fixed;width:100vw;height:100vh;";
-                    const video = document.createElement("video");
-                    video.style +=
-                        ";position:fixed;left:0;right:0;top:0;bottom:0;width:100vw;height:100vh;background-color:black;z-index:1145141919810;";
-                    const source = document.createElement("source");
-                    source.src = this.selectedSongData.unlockVideo + "?nocache=nocache";
-                    video.appendChild(source);
-                    video.autoplay = true;
-                    video.addEventListener("ended", evt => {
-                        main.removeChild(evt.target);
-                        localStorage.setItem(this.selectedSongData.id + "_Unlocked", "y");
-                        res();
-                    });
-                    main.appendChild(video);
-                });
-            },
-            // 释放缓存里的 blob object URL（不 revoke 会随整页存续泄漏），
-            // 列表刷新与组件销毁时调用
-            clearImageCache() {
-                for (const url of this.imageCache.values()) {
-                    if (url.startsWith("blob:")) URL.revokeObjectURL(url);
-                }
-                this.imageCache.clear();
-            },
-            async fetchImage(url) {
-                if (!url.startsWith("/PTVirtual/")) return;
-                if (this.imageCache.has(url)) return this.imageCache.get(url);
-
-                this.loadingImages.set(url, true);
-
-                try {
-                    const response = await ptdb.fetch(url);
-                    const blob = await response.blob();
-                    const objectURL = URL.createObjectURL(blob);
-
-                    this.imageCache.set(url, objectURL);
-                    this.loadingImages.set(url, false);
-
-                    return objectURL;
-                } catch (error) {
-                    alert(error);
-                    console.error("Error loading image:", error);
-                    this.loadingImages.set(url, false);
-                    return url; // Fallback to original URL
-                }
-            },
-        },
-        watch: {
-            selectChoice: {
-                handler(newVal, oldVal) {
-                    if (oldVal === "empty") this.selectChoice = oldVal;
-                    if (newVal === "local") this.loadOffline();
-                    else if (newVal === "favorite") this.loadFavouriteSongs();
-                    else if (newVal === "empty") this.chartList = [];
-                    this.selectedSongData = null;
-                    this.scrolledTop = 0;
-                    document.querySelector("#songSelectList").scrollTop = 0;
-                    this.showBlank = false;
-                    audio.stop();
-                    this.search.name = "";
-                },
-            },
-            favouriteSongs: {
-                handler(newVal) {
-                    ptdb.gameConfig.save(newVal, "favouriteSongs");
-                },
-                deep: true,
-            },
-            "chartList.results": {
-                handler(newVal) {
-                    this.clearImageCache();
-                    newVal.forEach(chart => {
-                        if (chart.illustration) this.fetchImage(chart.illustration);
-                    });
-                },
-                // deep: true,
-            },
+        beforeUnmount() {
+            if (this._unsubscribe) this._unsubscribe();
+            if (this._observer) this._observer.disconnect();
+            for (const key of Object.keys(this.coverUrls)) {
+                if (this.coverUrls[key]) URL.revokeObjectURL(this.coverUrls[key]);
+            }
         },
         meta: {
             keepAlive: true,
@@ -642,639 +537,680 @@
 </script>
 
 <template>
-    <div id="songSelect" style="width: 95%; margin: 0 auto" v-if="toSyncOrPlay !== 3">
-        <div class="songsSourceSelectContainer">
-            <div class="songsSourceSelect">
-                <div>
+    <div id="chartSelectNew" class="routerRealPage">
+        <div class="csPanel blur">
+            <div class="csHeader">
+                <span class="csTitle">{{ $t("chartSelect.chartSelect") }}</span>
+                <span class="csActions">
                     <input
-                        type="radio"
-                        id="sc1"
-                        name="selectChoice"
-                        v-model="selectChoice"
-                        value="local"
-                    />
-                    <label for="sc1" v-html="$t('chartSelect.songSource.local')"></label>
-                </div>
-
-                <div>
-                <input
-                    type="radio"
-                    id="sc2"
-                    name="selectChoice"
-                    v-model="selectChoice"
-                    value="favorite"
-                />
-                    <label for="sc2" v-html="$t('chartSelect.songSource.favourites')"></label>
-                </div>
-            </div>
-        </div>
-
-        <div
-            id="songAndChartSelector"
-            class="blur"
-            style="width: 90vw; border-radius: 12px; overflow: hidden"
-        >
-            <div
-                id="songSelector"
-                style="
-                    width: 100%;
-                    overflow-y: scroll;
-                    margin-top: 2.5vh;
-                    height: calc(100% - 2.5vh);
-                "
-            >
-                <div
-                    :style="{ width: selectedSongData ? '41.2vw' : '82vw' }"
-                    style="display: flex; height: 35px; position: fixed; z-index: 114"
-                >
-                    <a
-                        v-if="selectedSongData && selectChoice !== 'local'"
-                        @click="back2song"
-                        style="margin-top: 0.75%; margin-right: 0.75%"
-                    >
-                        ⬅️
-                    </a>
-                    <input
-                        class="input textInput"
-                        v-model="search.name"
-                        id="searchInput"
+                        class="csSearch"
+                        type="text"
+                        v-model="search"
                         :placeholder="$t('chartSelect.search')"
-                        style="flex: 15"
-                        @keyup.enter="doSearch"
-                        autocomplete="off"
                     />
                     <input
                         type="button"
-                        :value="$t('chartSelect.import')"
-                        @click="$router.push('/chartUpload')"
-                        style="flex: 1; margin-left: 10px"
-                        v-if="selectChoice === 'local'"
+                        :value="$t('chartSelect.config')"
+                        @click="settingsOpen = !settingsOpen"
                     />
-                    <br />
-                </div>
-                <div
-                    id="songSelectList"
-                    style="margin-top: 40px; height: calc((100% - 105px) + 2vh)"
-                    :style="{ overflow: showBlank && !selectedSongData ? 'hidden' : 'scroll' }"
-                >
-                    <div v-if="!chartList.results || chartList.results.length == 0">
-                        {{
-                            selectChoice === "favorite"
-                                ? $t("chartSelect.chartListIsEmptyFavorite")
-                                : isEmptyOffline
-                                ? $t("chartSelect.chartListIsEmptyOffline")
-                                : $t("chartSelect.chartListIsEmpty")
-                        }}
-                        <br />
-                        <br />
-                        <input
-                            v-if="selectChoice === 'local'"
-                            type="button"
-                            :value="$t('chartSelect.goDownloadCharts')"
-                            style="font-size: 1em; width: auto; padding: 0.2em 1em"
-                            @click="$router.push('/chartManage')"
-                        />
-                    </div>
-                    <!-- new -->
-                    <div id="chartListall" :fullwidth="!selectedSongData">
-                        <div
-                            class="scoreSongCard songItem"
-                            style="color: black; margin: auto"
-                            v-for="chart in chartList.results"
-                            @click="
-                                showBlank = true;
-                                goDetails(chart).catch(e => (showBlank = false));
-                            "
-                            :style="{
-                                display: 'flex',
-                                background:
-                                    selectedSongData == chart
-                                        ? 'rgba(255,255,255,0.75)'
-                                        : 'rgba(237,247,255,0.4)',
-                            }"
-                        >
-                            <div style="flex: 3; overflow: hidden; aspect-ratio: 3 / 2">
-                                <img
-                                    :src="
-                                        loadingImages.get(chart.illustration)
-                                            ? null
-                                            : imageCache.get(chart.illustration) ||
-                                              chart.illustration
-                                    "
-                                    style="object-fit: cover; height: 100%; width: 100%"
-                                />
-                                <div
-                                    class="songCardCover"
-                                    v-show="!selectedSongData"
-                                    style="font-size: 1.25vw; color: white; line-height: 1.2em"
-                                    :style="{
-                                        '--bg': `url(${loadingImages.get(chart.illustration) ? null : imageCache.get(chart.illustration) || chart.illustration})`,
-                                    }"
-                                >
-                                    <div class="songCardName">{{ chart.name }}</div>
-                                    <br />
-                                    <div class="songCardComposer">{{ chart.composer }}</div>
-                                </div>
-                            </div>
-                            <div
-                                v-if="selectedSongData"
-                                :style="{
-                                    flex: 7,
-                                    display: 'flex',
-                                    flexDirection: 'column',
-                                    lineHeight: '1.2em',
-                                    'margin-left': '1vw',
-                                    'margin-top': '1vh',
-                                }"
-                            >
-                                <div>{{ chart.name }}</div>
-                                <div style="flex: 1; font-size: 0.6em">{{ chart.composer }}</div>
+                    <input
+                        type="button"
+                        :value="$t('chartManage.refresh')"
+                        :disabled="loading"
+                        @click="refreshAll()"
+                    />
+                </span>
+            </div>
 
-                                <div
-                                    style="
-                                        flex: 3;
-                                        display: flex;
-                                        flex-wrap: wrap;
-                                        align-items: center;
-                                    "
-                                >
-                                    <div
-                                        v-for="realchart in chart.charts"
-                                        class="chartLevel"
-                                        :style="{ background: getLevelColor(realchart.level) }"
-                                    >
-                                        <span>
-                                            {{ formatChartLevel(realchart) }}
-                                        </span>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    <div v-if="showBlank && !selectedSongData" style="height: 114514px"></div>
-                    <!-- old <deleted> -->
-                </div>
+            <div v-if="settingsOpen" class="csSettings">
+                <label class="csSettingItem">
+                    {{ $t("chartSelect.playConfig.speed") }}
+                    <select v-model="playSettings.speed">
+                        <option value="">{{ $t("chartSelect.playConfig.speeds.normal") }}</option>
+                        <option value="0.5">{{ $t("chartSelect.playConfig.speeds.slowest") }}</option>
+                        <option value="0.75">{{ $t("chartSelect.playConfig.speeds.slower") }}</option>
+                        <option value="1.25">{{ $t("chartSelect.playConfig.speeds.faster") }}</option>
+                        <option value="1.5">{{ $t("chartSelect.playConfig.speeds.fastest") }}</option>
+                    </select>
+                </label>
+                <label class="csSettingItem">
+                    <input type="checkbox" v-model="playSettings.mirror" />
+                    {{ $t("chartSelect.playConfig.mirror") }}
+                </label>
+                <label class="csSettingItem">
+                    <input type="checkbox" v-model="playSettings.practiseMode" />
+                    {{ $t("chartSelect.playConfig.practiseMode") }}
+                </label>
+                <label class="csSettingItem">
+                    <input type="checkbox" v-model="playSettings.previewMode" />
+                    {{ $t("chartSelect.playConfig.previewMode") }}
+                </label>
+                <label class="csSettingItem">
+                    <input type="checkbox" v-model="playSettings.adjustOffset" />
+                    {{ $t("chartSelect.playConfig.adjustOffset") }}
+                </label>
+                <label class="csSettingItem">
+                    <input type="checkbox" v-model="playSettings.videoRecorder" />
+                    {{ $t("chartSelect.playConfig.videoRecorder") }}
+                </label>
+            </div>
+
+            <div v-if="paused" class="csNotice">{{ $t("chartManage.pausedNotice") }}</div>
+            <div v-else-if="pendingCount" class="csNotice">
+                {{ $t("chartManage.downloadingNotice", [pendingCount]) }}
+            </div>
+            <div v-if="loadError" class="csNotice csNoticeError">
+                {{ $t("chartManage.serverUnreachable", [loadError]) }}
+                <input type="button" :value="$t('chartManage.retry')" @click="loadServerList()" />
+            </div>
+
+            <!-- 章节条 -->
+            <div class="csChapters">
                 <div
-                    id="pageControl"
-                    :style="{ width: selectedSongData ? '40vw' : '84vw' }"
-                    style="text-align: center; font-size: 20px; line-height: 25px; margin-top: 10px"
+                    v-for="chapter in chapterItems"
+                    :key="chapter.id"
+                    class="csChapter"
+                    :class="{ csChapterOn: currentChapter && currentChapter.id === chapter.id }"
+                    @click="selectedChapter = chapter.id"
                 >
-                    <a v-if="canPrev" @click="loadPrevPage()">◀</a>
-                    &nbsp;
-                    <span @click="goJustPageAsk()" style="color: black">
-                        {{
-                            $t("chartSelect.pageCount", {
-                                page,
-                                pageAll,
-                            })
-                        }}
-                    </span>
-                    &nbsp;
-                    <a v-if="canNext" @click="loadNextPage()">▶</a>
+                    <div
+                        class="csChapterCover"
+                        :data-coverkey="'ch:' + chapter.id"
+                        :data-coverurl="chapter.groups[0] ? chapter.groups[0].cover : ''"
+                        :data-localsong="chapter.groups[0] ? chapter.groups[0].localSongId : ''"
+                    >
+                        <img
+                            v-if="coverUrls['ch:' + chapter.id]"
+                            :src="coverUrls['ch:' + chapter.id]"
+                            alt=""
+                        />
+                        <span v-else>{{ coverInitial(chapter.name) }}</span>
+                    </div>
+                    <div class="csChapterName">{{ chapter.name }}</div>
+                    <div class="csChapterCount">{{ chapter.groups.length }}</div>
                 </div>
             </div>
 
-            <div
-                id="chartSelect"
-                v-if="selectedSongData"
-                :style="{ width: selectedSongData ? '100%' : '40vw' }"
-            >
+            <!-- 歌曲列表 -->
+            <div class="csList">
+                <div v-if="loading && !songGroups.length" class="csEmpty">
+                    {{ $t("chartManage.loadingLocal") }}
+                </div>
+                <div v-else-if="!visibleSongs.length" class="csEmpty">
+                    {{ forceOffline ? $t("chartSelect.chartListIsEmptyOffline") : $t("chartSelect.chartListIsEmpty") }}
+                </div>
+
                 <div
-                    v-if="selectedSongData"
-                    style="margin-top: 2.5vh; overflow-y: scroll; height: calc(100% - 2.5vh)"
+                    v-for="group in visibleSongs"
+                    :key="group.key"
+                    class="csRow"
+                    :class="{ csRowOpen: expandedKey === group.key }"
                 >
-                    <div class="scoreSongCard" style="width: 90%; height: 30vh">
-                        <img
-                            :src="
-                                loadingImages.get(selectedSongData.illustration)
-                                    ? null
-                                    : imageCache.get(selectedSongData.illustration) ||
-                                      selectedSongData.illustration
-                            "
-                            style="object-fit: cover; width: 100%; height: 100%"
-                        />
-                    </div>
-                    <div
-                        style="
-                            display: flex;
-                            justify-content: space-evenly;
-                            flex-wrap: wrap;
-                            height: max-content;
-                        "
-                    >
-                        <a
-                            @click="chartSelectorOpenedTab = 'chartSelect'"
-                            v-if="chartSelectorOpenedTab === 'config'"
+                    <div class="csRowMain" @click="expandedKey = expandedKey === group.key ? null : group.key">
+                        <div
+                            class="csCoverWrap"
+                            :data-coverkey="group.key"
+                            :data-coverurl="group.cover || ''"
+                            :data-localsong="group.localSongId || ''"
                         >
-                            &nbsp;&nbsp;{{ $t("chartSelect.chartSelect") }}
-                        </a>
-                        <a
-                            @click="chartSelectorOpenedTab = 'config'"
-                            v-if="chartSelectorOpenedTab === 'chartSelect'"
-                        >
-                            &nbsp;&nbsp;{{ $t("chartSelect.config") }}
-                        </a>
-
-                        <a @click="favourite">
-                            &nbsp;&nbsp;{{
-                                favouriteSongs.includes(selectedSongData.id)
-                                    ? $t("chartSelect.favourites.remove")
-                                    : $t("chartSelect.favourites.add")
-                            }}
-                        </a>
-
-                        <a @click="edit" v-if="canEdit">
-                            &nbsp;&nbsp; {{ $t("chartSelect.edit") }}
-                        </a>
-                        <a @click="deleteChart" v-if="canEdit">
-                            &nbsp;&nbsp; {{ $t("chartSelect.delete") }}
-                        </a>
+                            <img v-if="coverUrls[group.key]" class="csCover" :src="coverUrls[group.key]" alt="" />
+                            <div v-else class="csCover csCoverEmpty">{{ coverInitial(group.name) }}</div>
+                        </div>
+                        <div class="csRowInfo">
+                            <div class="csRowName">
+                                {{ group.name || $t("chartManage.unnamed") }}
+                                <span
+                                    v-if="isFavourite(group)"
+                                    class="csFavOn"
+                                    :title="$t('chartSelect.favourites.remove')"
+                                >★</span>
+                            </div>
+                            <div class="csRowMeta">
+                                {{ group.composer || $t("chartManage.unknownComposer") }}
+                                <template v-if="group.illustrator"> × {{ group.illustrator }}</template>
+                            </div>
+                        </div>
+                        <div class="csBadges">
+                            <div
+                                v-for="diff in group.diffs"
+                                :key="diff.key"
+                                class="csBadge"
+                                :class="['csBadge-' + diffState(diff).kind]"
+                                :style="{ backgroundColor: levelColor(diff.level) }"
+                                :title="diff.charter ? $t('chartManage.charter', [diff.charter]) : ''"
+                                @click.stop="onBadge(group, diff)"
+                            >
+                                <span class="csBadgeLv">{{ diff.level }}</span>
+                                <span class="csBadgeRating">{{ ratingText(diff) }}</span>
+                                <span v-if="diffState(diff).kind === 'done'" class="csBadgeMark">
+                                    <svg viewBox="0 0 12 12" width="11" height="11" aria-hidden="true">
+                                        <path d="M3 6.5 L5.2 8.8 L9 3.6" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                                    </svg>
+                                </span>
+                                <span v-else-if="diffState(diff).kind === 'busy'" class="csBadgeMark csBadgePct">
+                                    {{ diffState(diff).item.progress || 0 }}
+                                </span>
+                                <span v-else-if="diffState(diff).kind === 'failed'" class="csBadgeMark">!</span>
+                                <span v-else-if="diffState(diff).kind === 'broken'" class="csBadgeMark">!</span>
+                                <span v-else-if="diffState(diff).kind === 'queued'" class="csBadgeMark">…</span>
+                                <span v-else class="csBadgeMark">
+                                    <svg viewBox="0 0 12 12" width="11" height="11" aria-hidden="true">
+                                        <path d="M6 2.5 L6 8 M3.5 6.5 L6 9 L8.5 6.5" fill="none" stroke="#fff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+                                    </svg>
+                                </span>
+                            </div>
+                        </div>
+                        <div class="csChevron" :class="{ csChevronOpen: expandedKey === group.key }">
+                            <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
+                                <path d="M3 4.5 L6 8 L9 4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+                            </svg>
+                        </div>
                     </div>
 
-                    <Transition name="slide-fade">
-                        <div id="chartSelectCharts" v-if="chartSelectorOpenedTab === 'chartSelect'">
-                            <div v-if="selectedSongData.charts.length">
-                                <div
-                                    class="scoreSongCard chartItem"
-                                    style="margin-left: 5%; width: 90%; height: 30%; color: black"
-                                    :style="{
-                                        minHeight: chart.selected ? '75px' : '30px',
-                                        background: chart.selected ? '#d6e9ff' : '#00000016',
-                                    }"
-                                    v-for="chart in selectedSongData.charts"
-                                    @click="selectChart(chart)"
-                                >
-                                    <div
-                                        style="
-                                            display: block;
-                                            width: 100%;
-                                            display: flex;
-                                            flex-direction: column;
-                                        "
-                                    >
-                                        <div style="display: flex; flex: 3; padding-top: 5px">
-                                            <div class="chartItemLevel" style="margin-left: 2%">
-                                                {{ formatChartLevel(chart) }}
-                                                {{ chart.ranked ? "Ranked" : "" }}
-                                            </div>
-                                            <div class="chartItemCharter" style="margin-left: 5%">
-                                                {{ cleanStr(chart.charter) }}
-                                            </div>
+                    <div v-if="expandedKey === group.key" class="csDetail">
+                        <div v-for="diff in group.diffs" :key="diff.key" class="csDiffRow">
+                            <div class="csDiffInfo">
+                                <span class="csDiffLv" :style="{ backgroundColor: levelColor(diff.level) }">{{ diff.level }}</span>
+                                <span class="csDiffText">
+                                    Lv.{{ ratingText(diff) }}
+                                    <template v-if="diff.charter"> · {{ $t("chartManage.charter", [diff.charter]) }}</template>
+                                    <template v-if="diff.file && !diff.localChart"> · {{ formatSize(diff.file.size) }}</template>
+                                    <template v-if="diff.outdated"> · {{ $t("chartManage.outdated") }}</template>
+                                    <template v-if="diff.file && diff.file.valid === false"> · {{ diff.file.error }}</template>
+                                    <template v-if="bestScoreOf(diff.localChart)">
+                                        · {{ scoreBadge(bestScoreOf(diff.localChart)) }}
+                                        {{ String(bestScoreOf(diff.localChart).score).padStart(7, "0") }}
+                                        ({{ (bestScoreOf(diff.localChart).acc * 100).toFixed(2) }}%)
+                                    </template>
+                                </span>
+                            </div>
+                            <div class="csDiffActions">
+                                <template v-if="diffState(diff).kind === 'busy'">
+                                    <div class="csProgressWrap">
+                                        <div class="csProgressBar">
+                                            <div class="csProgressFill" :style="{ width: (diffState(diff).item.progress || 0) + '%' }"></div>
                                         </div>
-
-                                        <div
-                                            class="chartSelectChartItemDetalis"
-                                            v-if="chart.selected"
-                                            style="
-                                                display: flex;
-                                                text-align: left;
-                                                margin-left: 2%;
-                                                flex: 7;
-                                            "
-                                        >
-                                            <div
-                                                :style="{
-                                                    flex: 10,
-                                                    'margin-top': `${chart.userScore[0][3] * 20}px`,
-                                                }"
-                                            >
-                                                <span
-                                                    :style="{
-                                                        color: chart.userScore[0][1],
-                                                        'font-size': chart.userScore[0][2],
-                                                    }"
-                                                >
-                                                    {{ chart.userScore[0][0] }}
-                                                </span>
-                                            </div>
-                                            <div style="flex: 75; margin-top: 5px">
-                                                <span style="margin-left: 5%; font-size: 25px">
-                                                    {{ chart.userScore[1] }}
-                                                </span>
-                                                <span style="margin-left: 2%; font-size: 15px">
-                                                    {{ chart.userScore[2] }}
-                                                </span>
-                                            </div>
-                                            <div class="play" style="display: block; flex: 10">
-                                                <input
-                                                    type="button"
-                                                    @click="loadChart(chart)"
-                                                    :value="$t('chartSelect.select')"
-                                                    style="margin-right: 8px"
-                                                />
-                                            </div>
-                                        </div>
+                                        <span class="csProgressText">
+                                            {{ diffState(diff).item.status === "importing" ? $t("chartManage.importing") : (diffState(diff).item.progress || 0) + "%" }}
+                                        </span>
                                     </div>
-                                </div>
-                            </div>
-                            <div v-else style="text-align: center; padding-top: 20px">
-                                {{ $t("chartSelect.thisSongHasNoPlayableCharts") }}
-                            </div>
-                        </div>
-                    </Transition>
-                    <Transition name="slide-fade">
-                        <div id="chartSelectConfig" v-if="chartSelectorOpenedTab === 'config'">
-                            <div style="display: flex" v-if="!isMulti">
-                                <input
-                                    type="checkbox"
-                                    v-model="selectedPlayingSettings.mirror"
-                                    id="selectMirror"
-                                />
-                                <label for="selectMirror">
-                                    {{ $t("chartSelect.playConfig.mirror") }}
-                                </label>
-                            </div>
-
-                            <div style="display: flex" v-if="!isMulti">
-                                <input
-                                    type="checkbox"
-                                    v-model="selectedPlayingSettings.adjustOffset"
-                                    id="adjustOffset"
-                                />
-                                <label for="adjustOffset">
-                                    {{ $t("chartSelect.playConfig.adjustOffset") }}
-                                </label>
-                            </div>
-
-                            <div style="display: flex" v-if="!isMulti">
-                                <input
-                                    type="checkbox"
-                                    v-model="selectedPlayingSettings.previewMode"
-                                    id="previewMode"
-                                />
-                                <label
-                                    for="previewMode"
-                                    v-if="!selectedPlayingSettings.adjustOffset"
-                                >
-                                    {{ $t("chartSelect.playConfig.previewMode") }}
-                                </label>
-                            </div>
-
-                            <div style="display: flex" v-if="!isMulti">
-                                <input
-                                    type="checkbox"
-                                    v-model="selectedPlayingSettings.practiseMode"
-                                    id="practiseMode"
-                                    v-if="!selectedPlayingSettings.previewMode"
-                                />
-                                <label
-                                    for="practiseMode"
-                                    v-if="
-                                        !selectedPlayingSettings.previewMode &&
-                                        !selectedPlayingSettings.adjustOffset
-                                    "
-                                >
-                                    {{ $t("chartSelect.playConfig.practiseMode") }}
-                                </label>
-                            </div>
-
-                            <div style="display: flex" v-if="!isPTApp">
-                                <input
-                                    type="checkbox"
-                                    v-model="selectedPlayingSettings.videoRecorder"
-                                    id="videoRecorder"
-                                />
-                                <label for="videoRecorder">
-                                    {{ $t("chartSelect.playConfig.videoRecorder") }}
-                                </label>
-                            </div>
-
-                            <div style="display: flex">
-                                <span>{{ $t("chartSelect.playConfig.speed") }} :&nbsp;&nbsp;</span>
-                                <select
-                                    v-model="selectedPlayingSettings.speed"
-                                    style="width: 4em; height: 30px; margin-top: -0.1em"
-                                >
-                                    <option value="Slowest">
-                                        {{ $t("chartSelect.playConfig.speeds.slowest") }}
-                                    </option>
-                                    <option value="Slower">
-                                        {{ $t("chartSelect.playConfig.speeds.slower") }}
-                                    </option>
-                                    <option value="">
-                                        {{ $t("chartSelect.playConfig.speeds.normal") }}
-                                    </option>
-                                    <option value="Faster">
-                                        {{ $t("chartSelect.playConfig.speeds.faster") }}
-                                    </option>
-                                    <option value="Fastest">
-                                        {{ $t("chartSelect.playConfig.speeds.fastest") }}
-                                    </option>
-                                </select>
+                                </template>
+                                <template v-else-if="diffState(diff).kind === 'queued'">
+                                    <span class="csTag">{{ $t("chartManage.tagQueued") }}</span>
+                                </template>
+                                <template v-else-if="diffState(diff).kind === 'failed'">
+                                    <span class="csFailedText">{{ diffState(diff).item.error || $t("chartManage.downloadFailed") }}</span>
+                                    <input type="button" :value="$t('chartManage.retry')" @click="retryItem(diff)" />
+                                </template>
+                                <template v-else-if="diffState(diff).kind === 'broken'">
+                                    <span class="csTag csTagBroken" :title="diff.file.error">{{ $t("chartManage.tagBroken") }}</span>
+                                </template>
+                                <template v-else-if="diffState(diff).kind === 'done'">
+                                    <input type="button" class="csPlayBtn" :value="$t('chartSelect.play')" @click="playDiff(group, diff)" />
+                                    <input
+                                        v-if="diff.file && diff.outdated"
+                                        type="button"
+                                        :value="$t('chartManage.update')"
+                                        @click="updateDiff(diff)"
+                                    />
+                                    <input type="button" :value="$t('chartManage.delete')" @click="deleteDiff(group, diff)" />
+                                </template>
+                                <template v-else>
+                                    <input
+                                        v-if="diff.file"
+                                        type="button"
+                                        :value="diff.link ? $t('chartManage.redownload') : $t('chartManage.download')"
+                                        @click="downloadDiff(diff)"
+                                    />
+                                </template>
                             </div>
                         </div>
-                    </Transition>
+                        <div class="csDetailFoot">
+                            <input
+                                type="button"
+                                :value="isFavourite(group) ? $t('chartSelect.favourites.remove') : $t('chartSelect.favourites.add')"
+                                @click="toggleFavourite(group)"
+                            />
+                            <input
+                                v-if="group.diffs.some(d => d.localChart)"
+                                type="button"
+                                :value="$t('chartManage.delete')"
+                                @click="deleteSongGroup(group)"
+                            />
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
-    </div>
-    <div
-        id="songSelect"
-        style="
-            width: 95%;
-            margin: 0 auto;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        "
-        v-else
-    >
-        <p id="waitMsg" style="font-size: 2em">{{ $t("multiplayer.multiWaitLoadChart") }}</p>
     </div>
 </template>
 
 <style>
-    #songSelect {
-        display: flex;
-        height: calc(97.5% - 75px);
-        position: fixed;
-        left: 2.5%;
-        top: 75px;
+    #chartSelectNew {
+        width: 92%;
+        margin: 0 auto;
+        padding-bottom: 30px;
     }
 
-    .songSearch {
-        width: 90%;
-        margin: auto;
-        display: flex;
-        justify-content: space-between;
-        font-size: 1.5em;
-    }
-
-    .songSearch div {
-        width: 100%;
-    }
-
-    #searchBtn {
-        width: auto;
-        min-width: 100%;
-        text-align: center;
-        font-size: 0.75em;
-        float: right;
-        margin-right: 5%;
-        height: auto;
-    }
-
-    #searchInput {
-        width: 90%;
-        margin: left;
-    }
-
-    .songsSourceSelectContainer {
-        display: flex;
-        flex-direction: column;
-        height: 100%;
-        width: 11vw;
-        margin-left: -1vw;
-        overflow-y: scroll;
-    }
-
-    #songAndChartSelector {
-        display: flex;
-        height: 100%;
-        width: 90vw;
-        margin-left: 0%;
+    #chartSelectNew .csPanel {
+        margin-top: 12px;
+        border-radius: 12px;
         background-color: #ffffff60;
+        padding: 12px 16px;
     }
 
-    #songSelector {
-        height: 100%;
-        width: 45vw;
-        padding-left: 2.5vw;
-        padding-right: 2.5vw;
-        overflow-x: hidden;
-    }
-
-    #chartSelect {
-        height: 100%;
-        width: 40vw;
-    }
-
-    .chartItem {
-        color: black;
-    }
-
-    .songItem {
-        color: black;
-        width: 100%;
-        min-height: 100px;
+    #chartSelectNew .csHeader {
         display: flex;
-        box-shadow: 0px 0px 0px 0.8px var(--color-box-shadow);
+        align-items: baseline;
+        flex-wrap: wrap;
+        gap: 8px 12px;
+        padding-bottom: 10px;
+        border-bottom: 1px solid #00000022;
     }
 
-    .chartLevel {
-        min-width: 75px;
-        max-width: 100px;
-        text-align: center;
-        border-radius: 5px;
-        color: white;
-        margin-left: 0.25vw;
-        max-height: 20px;
-        overflow: hidden;
+    #chartSelectNew .csTitle {
+        flex: 1;
+        font-size: 1.4em;
+        font-weight: bold;
+        color: darkslategray;
+        text-align: left;
     }
 
-    .chartLevel > span {
-        min-width: 65px;
-        max-width: 90px;
-        margin-left: 5px;
-        margin-right: 5px;
-    }
-
-    #pageControl {
-        bottom: 0px;
-        height: 25px;
-        overflow: hidden;
-    }
-
-    .songsSourceSelect {
-        display: flex;
-        flex-direction: column;
-        gap: 1.2vh;
-        padding: 1.2vh 0;
-    }
-
-    .songsSourceSelect > div input[type="radio"] {
-        display: none;
-    }
-
-    .songsSourceSelect div {
-        width: 90%;
-    }
-
-    .songsSourceSelect div label {
-        display: block;
-        background-color: #ffffff60;
-        color: #000000;
-        border: none;
-        border-radius: 10px;
-        font-size: 1.5vw;
-        padding: min(4.5vh, 25px) 1.5vw;
-        line-height: 0;
-    }
-
-    .songsSourceSelect div input:checked ~ label {
-        color: #ffffff;
-        background-color: #2b5793;
-    }
-
-    .songsSourceSelect div label::before {
-        content: unset !important;
-    }
-
-    #colorPicker {
-        color: #00000016;
-    }
-
-    #chartSelectCharts,
-    #chartSelectConfig {
-        width: 100%;
-        margin-top: 0.5vh;
-        margin-left: -2%;
-        color: black;
-    }
-
-    #chartSelectConfig {
-        /* background: #ffffff60;
-    position: fixed;
-    right: 0;
-    top: 0;
-    bottom: 0;
-    width: 30%; */
-        justify-content: center;
-        display: flex;
-        flex-direction: column;
-        align-content: center;
+    #chartSelectNew .csActions {
+        display: inline-flex;
         align-items: center;
+        gap: 6px;
     }
 
-    #chartListall[fullwidth="true"] {
-        /* display: grid; */
-        /* grid-template-columns: repeat(auto-fit, minmax(25%, 1fr)); */
+    #chartSelectNew .csSearch {
+        width: 150px;
+        padding: 3px 8px;
+        border: 1px solid #00000033;
+        border-radius: 6px;
+        background-color: #ffffff88;
+    }
+
+    #chartSelectNew .csSettings {
         display: flex;
         flex-wrap: wrap;
-        width: 100%;
+        gap: 8px 18px;
+        padding: 10px 4px;
+        border-bottom: 1px solid #00000014;
     }
 
-    #chartListall[fullwidth="true"] > .songItem {
-        /* width: 25%; */
-        /* margin: 5px; */
-        width: calc(25% - 5px);
-        font-size: 1.25vw;
-
-        position: relative;
-        -webkit-box-sizing: border-box;
-        box-sizing: border-box;
-        overflow: hidden;
-        color: #fff;
-        border: 1px solid var(--color-box-border);
-        box-shadow: 0 0 8px 0.8px var(--color-box-shadow);
-        border-radius: 10px;
-        text-align: left;
-        margin: 5px !important;
+    #chartSelectNew .csSettingItem {
         display: inline-flex;
-        margin-right: 0 !important;
+        align-items: center;
+        gap: 5px;
+        font-size: 0.88em;
+        color: #000000bb;
     }
 
-    #chartListall[fullwidth="true"] > .songItem > div > .songCardCover {
-        border: unset !important;
+    #chartSelectNew .csNotice {
+        margin-top: 8px;
+        padding: 6px 10px;
+        border-radius: 8px;
+        background-color: #2b57931a;
+        color: #2b5793;
+        font-size: 0.9em;
+        text-align: left;
+    }
+
+    #chartSelectNew .csNoticeError {
+        background-color: #c628281a;
+        color: #c62828;
+    }
+
+    #chartSelectNew .csEmpty {
+        padding: 24px 8px;
+        text-align: center;
+        color: #00000088;
+        font-style: italic;
+    }
+
+    /* ===== 章节条 ===== */
+    #chartSelectNew .csChapters {
+        display: flex;
+        gap: 10px;
+        overflow-x: auto;
+        padding: 10px 2px 12px;
+        border-bottom: 1px solid #00000014;
+    }
+
+    #chartSelectNew .csChapter {
+        flex-shrink: 0;
+        width: 108px;
+        cursor: pointer;
+        user-select: none;
+        border-radius: 10px;
+        padding: 6px;
+        text-align: center;
+    }
+
+    #chartSelectNew .csChapter:hover {
+        background-color: #ffffff70;
+    }
+
+    #chartSelectNew .csChapterOn {
+        background-color: #ffffffa8;
+        box-shadow: 0 1px 6px #00000022;
+    }
+
+    #chartSelectNew .csChapterCover {
+        width: 88px;
+        height: 88px;
+        margin: 0 auto;
+        border-radius: 10px;
+        overflow: hidden;
+        background: linear-gradient(135deg, #7d8f9c, #4a5a68);
+        color: #ffffffcc;
+        font-size: 1.6em;
+        font-weight: bold;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    #chartSelectNew .csChapterCover img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+    }
+
+    #chartSelectNew .csChapterName {
+        margin-top: 5px;
+        font-size: 0.72em;
+        color: #1c2b36;
+        line-height: 1.25;
+        height: 2.5em;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+    }
+
+    #chartSelectNew .csChapterCount {
+        font-size: 0.68em;
+        color: #00000077;
+    }
+
+    /* ===== 歌曲行 ===== */
+    #chartSelectNew .csRow {
+        border-bottom: 1px solid #00000014;
+    }
+
+    #chartSelectNew .csRow:last-child {
+        border-bottom: none;
+    }
+
+    #chartSelectNew .csRowMain {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 8px 10px;
+        cursor: pointer;
+        border-radius: 10px;
+    }
+
+    #chartSelectNew .csRowMain:hover {
+        background-color: #ffffff70;
+    }
+
+    #chartSelectNew .csRowOpen .csRowMain {
+        background-color: #ffffff90;
+    }
+
+    #chartSelectNew .csCoverWrap {
+        flex-shrink: 0;
+        width: 72px;
+        height: 72px;
+    }
+
+    #chartSelectNew .csCover {
+        width: 72px;
+        height: 72px;
+        border-radius: 10px;
+        object-fit: cover;
+        display: block;
+        box-shadow: 0 1px 4px #00000030;
+    }
+
+    #chartSelectNew .csCoverEmpty {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.6em;
+        font-weight: bold;
+        color: #ffffffcc;
+        background: linear-gradient(135deg, #7d8f9c, #4a5a68);
+    }
+
+    #chartSelectNew .csRowInfo {
+        flex: 1;
+        min-width: 0;
+        text-align: left;
+    }
+
+    #chartSelectNew .csRowName {
+        font-size: 1.05em;
+        font-weight: bold;
+        color: #1c2b36;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    #chartSelectNew .csFavOn {
+        color: #e6a23c;
+        font-size: 0.85em;
+        margin-left: 4px;
+    }
+
+    #chartSelectNew .csRowMeta {
+        font-size: 0.8em;
+        color: #00000088;
+        margin-top: 3px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    /* ===== 难度徽章 ===== */
+    #chartSelectNew .csBadges {
+        display: flex;
+        gap: 6px;
+        flex-shrink: 0;
+    }
+
+    #chartSelectNew .csBadge {
+        position: relative;
+        width: 46px;
+        height: 46px;
+        border-radius: 10px;
+        cursor: pointer;
+        color: white;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 1px 3px #00000033;
+        user-select: none;
+    }
+
+    #chartSelectNew .csBadge:hover {
+        filter: brightness(1.12);
+    }
+
+    #chartSelectNew .csBadge-busy {
+        opacity: 0.85;
+    }
+
+    #chartSelectNew .csBadge-broken {
+        filter: grayscale(0.8);
+    }
+
+    #chartSelectNew .csBadgeLv {
+        font-size: 0.72em;
+        font-weight: bold;
+        line-height: 1;
+        letter-spacing: 0.06em;
+    }
+
+    #chartSelectNew .csBadgeRating {
+        font-size: 0.95em;
+        font-weight: bold;
+        line-height: 1.15;
+    }
+
+    #chartSelectNew .csBadgeMark {
+        position: absolute;
+        right: 3px;
+        bottom: 2px;
+        font-size: 0.62em;
+        line-height: 1;
+        opacity: 0.95;
+    }
+
+    #chartSelectNew .csBadgePct {
+        background-color: #00000055;
+        border-radius: 4px;
+        padding: 0 2px;
+    }
+
+    #chartSelectNew .csChevron {
+        flex-shrink: 0;
+        color: #00000066;
+        transition: transform 0.15s;
+    }
+
+    #chartSelectNew .csChevronOpen {
+        transform: rotate(180deg);
+    }
+
+    /* ===== 展开明细 ===== */
+    #chartSelectNew .csDetail {
+        padding: 2px 10px 10px 94px;
+        text-align: left;
+    }
+
+    #chartSelectNew .csDiffRow {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 5px 0;
+        border-bottom: 1px dashed #00000014;
+    }
+
+    #chartSelectNew .csDiffRow:last-of-type {
+        border-bottom: none;
+    }
+
+    #chartSelectNew .csDiffInfo {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+    }
+
+    #chartSelectNew .csDiffLv {
+        flex-shrink: 0;
+        min-width: 34px;
+        text-align: center;
+        padding: 1px 6px;
+        border-radius: 5px;
+        color: white;
+        font-size: 0.78em;
+        font-weight: bold;
+    }
+
+    #chartSelectNew .csDiffText {
+        font-size: 0.82em;
+        color: #000000aa;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    #chartSelectNew .csDiffActions {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        flex-shrink: 0;
+        min-width: 170px;
+        justify-content: flex-end;
+    }
+
+    #chartSelectNew .csPlayBtn {
+        background-color: #2b5793;
+        color: white;
+        border: none;
+        border-radius: 6px;
+        padding: 2px 14px;
+        cursor: pointer;
+    }
+
+    #chartSelectNew .csDetailFoot {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding-top: 8px;
+    }
+
+    #chartSelectNew .csProgressWrap {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        width: 150px;
+    }
+
+    #chartSelectNew .csProgressBar {
+        flex: 1;
+        height: 8px;
+        border-radius: 4px;
+        background-color: #0000001f;
+        overflow: hidden;
+    }
+
+    #chartSelectNew .csProgressFill {
+        height: 100%;
+        border-radius: 4px;
+        background-color: #2b5793;
+        transition: width 0.2s;
+    }
+
+    #chartSelectNew .csProgressText {
+        width: 44px;
+        text-align: right;
+        font-size: 0.78em;
+        color: #00000099;
+        white-space: nowrap;
+    }
+
+    #chartSelectNew .csFailedText {
+        max-width: 180px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 0.78em;
+        color: #c62828;
+    }
+
+    #chartSelectNew .csTag {
+        display: inline-block;
+        padding: 1px 8px;
+        border-radius: 4px;
+        font-size: 0.75em;
+        background-color: #9e9e9e26;
+        color: #616161;
+        border: 1px solid #9e9e9e55;
+    }
+
+    #chartSelectNew .csTagBroken {
+        background-color: #c628281a;
+        color: #c62828;
+        border: 1px solid #c6282855;
     }
 </style>

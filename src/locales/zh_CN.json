@@ -130,6 +130,10 @@
         "title": "更新日志"
     },
     "chartSelect": {
+        "play": "游&#25179;",
+        "chapters": {
+            "favorites": "收藏"
+        },
         "jumpto": "请输入您要跳转的页码 (1 - {0})",
         "inputDosentMatchRequirement": "您的输入不合法",
         "favourites": {
@@ -178,7 +182,7 @@
         "thisSongHasNoPlayableCharts": "该歌曲暂无可游玩谱面！",
         "chartSelect": "谱面选择",
         "config": "游玩配置",
-        "chartListIsEmptyOffline": "没有可离线游玩的缓存谱面。请先到「谱面管理」下载谱面。",
+        "chartListIsEmptyOffline": "没有可离线游&#25179;的缓存谱面。请先联网下载谱面。",
         "chartListIsEmptyFavorite": "暂无已收藏的谱面",
         "goDownloadCharts": "去下载谱面"
     },

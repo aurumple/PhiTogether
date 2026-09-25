@@ -915,6 +915,38 @@
                                     <br />
                                 </div>
                                 <br />
+                                <div style="display: block">
+                                    <span
+                                        style="
+                                            font-size: xx-large;
+                                            font-weight: bold;
+                                            color: darkslategray;
+                                            margin: auto;
+                                        "
+                                    >
+                                        {{ $t("chartManage.dangerTitle") }}
+                                    </span>
+                                    <br />
+                                    <input
+                                        type="button"
+                                        :value="$t('chartManage.dangerDeleteAllCharts')"
+                                        @click="clearLocalData('charts')"
+                                    />
+                                    <input
+                                        type="button"
+                                        :value="$t('chartManage.dangerForceUpdate')"
+                                        @click="clearLocalData('self')"
+                                    />
+                                    <input
+                                        type="button"
+                                        :value="$t('chartManage.dangerClearAll')"
+                                        @click="clearLocalData('all')"
+                                    />
+                                    <div style="font-size: 0.78em; color: #00000077">
+                                        {{ $t("chartManage.dangerNote") }}
+                                    </div>
+                                </div>
+                                <br />
                                 <div
                                     v-if="gameConfig.account.userBasicInfo && gameConfig.account.userBasicInfo.isPTDeveloper"
                                     style="display: block"

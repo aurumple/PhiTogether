@@ -3,7 +3,6 @@ import StartPageComponent from "../pages/startpage.vue";
 import PlayingPageComponent from "../pages/playing.vue";
 import LoginPageComponent from "../pages/login.vue";
 import CalibratePageComponent from "../pages/calibrate.vue";
-import ChartManagePageComponent from "../pages/chartmanage.vue";
 import AboutPageComponent from "../pages/aboutpage.vue";
 import UserChartUploadComponent from "../pages/userChartUpload.vue";
 import UserChartEditComponent from "../pages/userChartEdit.vue";
@@ -22,9 +21,9 @@ const routes = [
     { path: "/playing", component: PlayingPageComponent },
     { path: "/login", component: LoginPageComponent },
     { path: "/calibrate", component: CalibratePageComponent },
-    { path: "/chartManage", component: ChartManagePageComponent },
-    // 旧书签兜底：原「缓存管理」页已并入谱面管理
-    { path: "/cacheManage", redirect: "/chartManage" },
+    // 谱面管理页已并入单人游戏（章节选曲），旧书签兜底
+    { path: "/chartManage", redirect: "/chartSelect" },
+    { path: "/cacheManage", redirect: "/chartSelect" },
     { path: "/aboutPage", component: AboutPageComponent },
     { path: "/chartUpload", component: UserChartUploadComponent },
     { path: "/chartEdit", component: UserChartEditComponent },
