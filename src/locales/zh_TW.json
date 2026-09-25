@@ -131,6 +131,16 @@
     },
     "chartSelect": {
         "play": "遊玩",
+        "board": {
+            "open": "榜單",
+            "close": "收起",
+            "loading": "載入中…",
+            "loadFailed": "榜單載入失敗",
+            "empty": "暫無成績",
+            "myRank": "我的排名 #{0}",
+            "resultRank": "本曲排名 #{0}",
+            "pendingUpload": "成績已本地保存，連線後上傳"
+        },
         "chapters": {
             "favorites": "收藏"
         },

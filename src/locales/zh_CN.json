@@ -130,7 +130,17 @@
         "title": "更新日志"
     },
     "chartSelect": {
-        "play": "游&#25179;",
+        "play": "游玩",
+        "board": {
+            "open": "榜单",
+            "close": "收起",
+            "loading": "加载中…",
+            "loadFailed": "榜单加载失败",
+            "empty": "暂无成绩",
+            "myRank": "我的排名 #{0}",
+            "resultRank": "本曲排名 #{0}",
+            "pendingUpload": "成绩已本地保存，联网后上传"
+        },
         "chapters": {
             "favorites": "收藏"
         },
@@ -182,7 +192,7 @@
         "thisSongHasNoPlayableCharts": "该歌曲暂无可游玩谱面！",
         "chartSelect": "谱面选择",
         "config": "游玩配置",
-        "chartListIsEmptyOffline": "没有可离线游&#25179;的缓存谱面。请先联网下载谱面。",
+        "chartListIsEmptyOffline": "没有可离线游玩的缓存谱面。请先联网下载谱面。",
         "chartListIsEmptyFavorite": "暂无已收藏的谱面",
         "goDownloadCharts": "去下载谱面"
     },

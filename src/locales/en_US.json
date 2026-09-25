@@ -131,6 +131,16 @@
     },
     "chartSelect": {
         "play": "Play",
+        "board": {
+            "open": "Top 10",
+            "close": "Close",
+            "loading": "Loading…",
+            "loadFailed": "Failed to load leaderboard",
+            "empty": "No scores yet",
+            "myRank": "My rank #{0}",
+            "resultRank": "Chart rank #{0}",
+            "pendingUpload": "Score saved locally; will upload when online"
+        },
         "chapters": {
             "favorites": "Favorites"
         },

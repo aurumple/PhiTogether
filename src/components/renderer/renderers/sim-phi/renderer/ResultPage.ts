@@ -288,6 +288,19 @@ export function resultPageRenderer(statData) {
         -1020 * tween.ease10(clip(simphiPlayer.animationTimer.end.second * 0.8 - 0.3)) + 2775,
         838
     );
+    // 本曲排名 / 待上传提示（playFinished 上传后异步填入，到了自动出现）
+    const ptRank = (shared.game as any)?.ptRank as { text: string; color: string } | null;
+    if (ptRank && ptRank.text) {
+        simphiPlayer.app.ctxos.globalAlpha = clip((simphiPlayer.animationTimer.end.second - 0.8) * 1.5);
+        simphiPlayer.app.ctxos.fillStyle = ptRank.color;
+        simphiPlayer.app.ctxos.textAlign = "left";
+        simphiPlayer.app.ctxos.font = `30px Saira`;
+        simphiPlayer.app.ctxos.fillText(
+            ptRank.text,
+            -1920 * tween.ease10(clip(simphiPlayer.animationTimer.end.second * 1)) + 2050,
+            880
+        );
+    }
     // 控制按钮
     // // ctxos.fillStyle = "#fff";
     // ctxos.font = '40px Saira';

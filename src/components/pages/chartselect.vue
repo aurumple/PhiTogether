@@ -5,6 +5,7 @@
     import ploading from "@utils/js/ploading.js";
     import { authFetch } from "@utils/serverApi";
     import { chartDownloadQueue } from "@utils/chartDownloadQueue";
+    import { ptServer } from "@utils/ptServer";
     import {
         formatChartLevel,
         mergeLocalSongCharts,
@@ -36,6 +37,8 @@
                 queueItems: [],
                 paused: false,
                 expandedKey: null,
+                boardKey: null,
+                boards: {},
                 favouriteSongs: [],
                 coverUrls: {},
                 loadError: "",
@@ -229,6 +232,9 @@
                 if (this.forceOffline) list = list.filter(g => g.diffs.some(d => d.localChart));
                 return list;
             },
+            canBoard() {
+                return ptServer.available() && !this.forceOffline;
+            },
         },
         methods: {
             formatSize(size) {
@@ -354,7 +360,8 @@
             bestScoreOf(chart) {
                 const records = shared.game.ptmain.gameConfig.ptBestRecords || {};
                 const data = records[chart && chart.id];
-                if (!data || data[3]) return null;
+                if (!data) return null;
+                // [score, acc, isFc, maxAcc, runAt]：前三项是最佳单局（见 global.js）
                 return { score: data[0], acc: data[1], isFc: data[2] };
             },
             scoreBadge(score) {
@@ -375,6 +382,48 @@
                               : s >= 700000
                                 ? "C"
                                 : "F";
+            },
+
+            // ===== 每难度排行榜（手风琴，同时只开一个，懒加载） =====
+            chartIdOf(diff) {
+                return (
+                    (diff.localChart && String(diff.localChart.id)) ||
+                    (diff.file && diff.file.chart_id) ||
+                    ""
+                );
+            },
+            toggleBoard(diff) {
+                if (this.boardKey === diff.key) {
+                    this.boardKey = null;
+                    return;
+                }
+                this.boardKey = diff.key;
+                const cached = this.boards[diff.key];
+                if (!cached || cached.error) this.loadBoard(diff);
+            },
+            async loadBoard(diff) {
+                const chartId = this.chartIdOf(diff);
+                if (!chartId) return;
+                this.boards[diff.key] = { loading: true, entries: [], me: null, error: "" };
+                const board = await ptServer.fetchChartLeaderboard(chartId);
+                if (!board) {
+                    this.boards[diff.key] = {
+                        loading: false,
+                        entries: [],
+                        me: null,
+                        error: this.$t("chartSelect.board.loadFailed"),
+                    };
+                    return;
+                }
+                this.boards[diff.key] = {
+                    loading: false,
+                    entries: board.entries,
+                    me: board.me,
+                    error: "",
+                };
+            },
+            boardDate(runAt) {
+                return runAt ? String(runAt).slice(0, 10) : "";
             },
 
             // ===== 数据装载 =====
@@ -465,6 +514,8 @@
                 chartDownloadQueue.items.filter(i => i.status === "done").map(i => i.name)
             );
             this.refreshQueue();
+            this.boardKey = null;
+            this.boards = {}; // 成绩可能刚变（游玩后返回），榜单重新懒加载
             await this.refreshAll();
         },
         mounted() {
@@ -708,7 +759,8 @@
                     </div>
 
                     <div v-if="expandedKey === group.key" class="csDetail">
-                        <div v-for="diff in group.diffs" :key="diff.key" class="csDiffRow">
+                        <div v-for="diff in group.diffs" :key="diff.key" class="csDiffWrap">
+                        <div class="csDiffRow">
                             <div class="csDiffInfo">
                                 <span class="csDiffLv" :style="{ backgroundColor: levelColor(diff.level) }">{{ diff.level }}</span>
                                 <span class="csDiffText">
@@ -763,7 +815,49 @@
                                         @click="downloadDiff(diff)"
                                     />
                                 </template>
+                                <input
+                                    v-if="canBoard && chartIdOf(diff)"
+                                    type="button"
+                                    class="csBoardBtn"
+                                    :value="boardKey === diff.key ? $t('chartSelect.board.close') : $t('chartSelect.board.open')"
+                                    @click="toggleBoard(diff)"
+                                />
                             </div>
+                        </div>
+                        <div v-if="boardKey === diff.key" class="csBoard">
+                            <template v-if="boards[diff.key]">
+                                <div v-if="boards[diff.key].loading" class="csBoardNote">
+                                    {{ $t("chartSelect.board.loading") }}
+                                </div>
+                                <div v-else-if="boards[diff.key].error" class="csBoardNote csBoardError">
+                                    {{ boards[diff.key].error }}
+                                </div>
+                                <div v-else-if="!boards[diff.key].entries.length" class="csBoardNote">
+                                    {{ $t("chartSelect.board.empty") }}
+                                </div>
+                                <template v-else>
+                                    <div
+                                        v-for="entry in boards[diff.key].entries"
+                                        :key="entry.user_id"
+                                        class="csBoardRow"
+                                        :class="{ csBoardMe: entry.is_me }"
+                                    >
+                                        <span class="csBoardRank">#{{ entry.rank }}</span>
+                                        <span class="csBoardName">{{ entry.name }}</span>
+                                        <span class="csBoardScore">{{ String(entry.score).padStart(7, "0") }}</span>
+                                        <span class="csBoardAcc">{{ Number(entry.acc).toFixed(2) }}%</span>
+                                        <span class="csBoardFc">{{ entry.is_fc ? "FC" : "" }}</span>
+                                        <span class="csBoardRks">{{ Number(entry.rks).toFixed(2) }}</span>
+                                        <span class="csBoardDate">{{ boardDate(entry.run_at) }}</span>
+                                    </div>
+                                    <div v-if="boards[diff.key].me" class="csBoardMeRow">
+                                        {{ $t("chartSelect.board.myRank", [boards[diff.key].me.rank]) }}
+                                        · {{ String(boards[diff.key].me.score).padStart(7, "0") }}
+                                        · {{ Number(boards[diff.key].me.acc).toFixed(2) }}%
+                                    </div>
+                                </template>
+                            </template>
+                        </div>
                         </div>
                         <div class="csDetailFoot">
                             <input
@@ -1095,17 +1189,16 @@
         text-align: left;
     }
 
+    #chartSelectNew .csDiffWrap {
+        border-bottom: 1px dashed #00000014;
+    }
+
     #chartSelectNew .csDiffRow {
         display: flex;
         align-items: center;
         justify-content: space-between;
         gap: 10px;
         padding: 5px 0;
-        border-bottom: 1px dashed #00000014;
-    }
-
-    #chartSelectNew .csDiffRow:last-of-type {
-        border-bottom: none;
     }
 
     #chartSelectNew .csDiffInfo {
@@ -1212,5 +1305,106 @@
         background-color: #c628281a;
         color: #c62828;
         border: 1px solid #c6282855;
+    }
+
+    #chartSelectNew .csBoardBtn {
+        background-color: #2b579314;
+        color: #2b5793;
+        border: 1px solid #2b579355;
+        border-radius: 6px;
+        padding: 2px 12px;
+        cursor: pointer;
+    }
+
+    #chartSelectNew .csBoard {
+        margin: 2px 0 8px;
+        padding: 6px 10px;
+        border-radius: 8px;
+        background-color: #00000008;
+        border: 1px solid #00000014;
+    }
+
+    #chartSelectNew .csBoardNote {
+        padding: 4px 2px;
+        font-size: 0.8em;
+        color: #00000099;
+    }
+
+    #chartSelectNew .csBoardError {
+        color: #c62828;
+    }
+
+    #chartSelectNew .csBoardRow {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 2px 4px;
+        border-radius: 5px;
+        font-size: 0.82em;
+    }
+
+    #chartSelectNew .csBoardMe {
+        background-color: #2b579322;
+        font-weight: bold;
+    }
+
+    #chartSelectNew .csBoardRank {
+        width: 44px;
+        flex-shrink: 0;
+        color: #2b5793;
+        font-weight: bold;
+    }
+
+    #chartSelectNew .csBoardName {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    #chartSelectNew .csBoardScore,
+    #chartSelectNew .csBoardAcc,
+    #chartSelectNew .csBoardRks,
+    #chartSelectNew .csBoardDate {
+        flex-shrink: 0;
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+        color: #000000cc;
+    }
+
+    #chartSelectNew .csBoardScore {
+        width: 74px;
+    }
+
+    #chartSelectNew .csBoardAcc {
+        width: 62px;
+    }
+
+    #chartSelectNew .csBoardRks {
+        width: 48px;
+        color: #00000099;
+    }
+
+    #chartSelectNew .csBoardDate {
+        width: 84px;
+        color: #00000099;
+    }
+
+    #chartSelectNew .csBoardFc {
+        width: 26px;
+        flex-shrink: 0;
+        text-align: center;
+        color: #00bef1;
+        font-weight: bold;
+    }
+
+    #chartSelectNew .csBoardMeRow {
+        margin-top: 4px;
+        padding: 3px 4px;
+        border-top: 1px dashed #00000022;
+        font-size: 0.82em;
+        color: #2b5793;
+        font-weight: bold;
     }
 </style>

@@ -567,6 +567,7 @@ const ptAppInstance = createApp({
                 return;
             }
             shared.game.finishToRecord && shared.game.finishToRecord();
+            shared.game.ptRank = null; // 结算画面的本曲排名（上传后异步填入）
             const chartData = JSON.parse(sessionStorage.getItem("loadedChart"));
             const isMulti = shared.game.ptmain.gameMode === "multi";
             const savePTCRLocally = () => {
@@ -578,43 +579,73 @@ const ptAppInstance = createApp({
 
                     try {
                         const stat = shared.game.stat;
-                        const ptStat = {
-                            chart: chartData.id,
-                            score: stat.scoreNum.toFixed(0),
-                            acc: stat.accNum,
-                            isFC: stat.lineStatus == 3,
+                        const chartId = String(chartData.id);
+                        const now = new Date().toISOString();
+                        const run = {
+                            score: Number(stat.scoreNum.toFixed(0)) || 0,
+                            // stat.accNum 是 0-1 刻度（见 sim-phi Stat.ts），服务端按百分比存
+                            acc: Number(stat.accNum) || 0,
+                            isFc: stat.lineStatus == 3,
+                            at: now,
                         };
 
                         if (!this.gameConfig.ptBestRecords) this.gameConfig.ptBestRecords = {};
-                        const toCompare = this.gameConfig.ptBestRecords[ptStat.chart] || [
-                            ptStat.score,
-                            ptStat.acc,
-                            ptStat.isFC,
+                        // 记录格式 [score, acc, isFc, maxAcc, runAt]：前三项是「最佳单局」
+                        // （(score, acc, isFc) 字典序最大的一局，与服务端榜单同键），
+                        // maxAcc 是历史最高精准度（RKS 口径），runAt 是该局时间。
+                        // 旧版数组（第 4 位曾是 isNew 标记）按同义迁移。
+                        const betterRun = (a, b) =>
+                            a.score !== b.score
+                                ? a.score > b.score
+                                : a.acc !== b.acc
+                                  ? a.acc > b.acc
+                                  : (a.isFc ? 1 : 0) > (b.isFc ? 1 : 0);
+                        const prev = this.gameConfig.ptBestRecords[chartId];
+                        let best = run;
+                        let maxAcc = run.acc;
+                        if (prev) {
+                            const prevRun = {
+                                score: Number(prev[0]) || 0,
+                                acc: Number(prev[1]) || 0,
+                                isFc: !!prev[2],
+                                at: typeof prev[4] === "string" ? prev[4] : "",
+                            };
+                            if (!betterRun(run, prevRun)) best = prevRun;
+                            maxAcc = Math.max(
+                                typeof prev[3] === "number" ? prev[3] : prevRun.acc,
+                                run.acc
+                            );
+                        }
+
+                        this.gameConfig.ptBestRecords[chartId] = [
+                            best.score,
+                            best.acc,
+                            best.isFc,
+                            maxAcc,
+                            best.at,
                         ];
-                        toCompare[0] = Math.max(toCompare[0], ptStat.score);
-                        toCompare[1] = Math.max(toCompare[1], ptStat.acc);
-                        toCompare[2] = toCompare[2] || ptStat.isFC;
 
-                        this.gameConfig.ptBestRecords[ptStat.chart] = toCompare;
-
-                        // 自建排行榜：合并后的最佳成绩入队上传（离线保留在 IndexedDB，
+                        // 自建排行榜：最佳单局入队上传（离线保留在 IndexedDB，
                         // 联网后由 online 事件/下次游玩/重新进入游戏重试）。
-                        // 上传成功后拉取最新 rks 写回玩家信息条（顶栏 pzrks）。
+                        // 上传成功后拉取最新 rks 写回玩家信息条（顶栏 pzrks），
+                        // 并把本曲名次交给结算画面显示。
                         try {
                             const songInfo = JSON.parse(
                                 sessionStorage.getItem("chartDetailsData") || "{}"
                             );
                             ptServer.queueRecord({
-                                chart_id: String(ptStat.chart),
+                                chart_id: chartId,
                                 song_name: String(songInfo.name || ""),
                                 difficulty: String(chartData.level || ""),
                                 rating: Number(chartData.difficulty) || 0,
-                                score: Number(toCompare[0]) || 0,
-                                // stat.accNum 是 0-1 刻度（见 sim-phi Stat.ts），服务端按百分比存
-                                acc: (Number(toCompare[1]) || 0) * 100,
-                                is_fc: !!toCompare[2],
+                                score: Number(best.score) || 0,
+                                acc: (Number(best.acc) || 0) * 100,
+                                is_fc: !!best.isFc,
+                                max_acc: (Number(maxAcc) || 0) * 100,
+                                run_at: best.at || now,
                             }).then(ok => {
                                 if (ok) ptServer.refreshLocalPlayerRks();
+                                this.updateResultRank(chartId, ok);
                             });
                         } catch (e) {
                             /* 本地成绩已保存，上报失败不影响游戏 */
@@ -630,6 +661,32 @@ const ptAppInstance = createApp({
             if (isMulti) {
                 shared.game.multiInstance.uploadScore();
             }
+        },
+        /** 结算画面的「本曲排名」：上传后查询名次；离线/失败给「待上传」提示。 */
+        async updateResultRank(chartId, uploaded) {
+            if (!ptServer.available()) {
+                shared.game.ptRank = null;
+                return;
+            }
+            const pendingText = {
+                text: this.$t("chartSelect.board.pendingUpload"),
+                color: "#fe4365",
+            };
+            if (!uploaded) {
+                shared.game.ptRank = pendingText;
+                return;
+            }
+            const board = await ptServer.fetchChartLeaderboard(chartId);
+            if (!board) {
+                shared.game.ptRank = pendingText;
+                return;
+            }
+            shared.game.ptRank = board.me
+                ? {
+                      text: this.$t("chartSelect.board.resultRank", [board.me.rank]),
+                      color: "#a2e27f",
+                  }
+                : null;
         },
         async playerLoaded() {
             // add lchzh pause

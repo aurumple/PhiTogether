@@ -11,8 +11,32 @@ export interface PtRecordInput {
     difficulty: string;
     rating: number;
     score: number;
+    /** Accuracy (%) of the best run — the run maximizing (score, acc, is_fc). */
     acc: number;
     is_fc: boolean;
+    /** Highest accuracy (%) ever achieved on the chart; drives rks. */
+    max_acc?: number;
+    /** When the best run happened (ISO string). */
+    run_at?: string;
+}
+
+export interface ChartLeaderboardEntry {
+    rank: number;
+    user_id: number;
+    name: string;
+    score: number;
+    /** Accuracy in percent (0-100). */
+    acc: number;
+    is_fc: boolean;
+    run_at: string | null;
+    rks: number;
+    is_me: boolean;
+}
+
+export interface ChartLeaderboardData {
+    chart_id: string;
+    entries: ChartLeaderboardEntry[];
+    me: ChartLeaderboardEntry | null;
 }
 
 export interface PtLeaderboardEntry {
@@ -74,6 +98,19 @@ export async function fetchLeaderboard(): Promise<PtLeaderboardData | null> {
         const resp = await authFetch("/api/game/pt/leaderboard");
         if (!resp.ok) return null;
         return (await resp.json()) as PtLeaderboardData;
+    } catch {
+        return null;
+    }
+}
+
+/** Top-10 ranks of one chart plus my own standing (even outside the top 10). */
+export async function fetchChartLeaderboard(chartId: string): Promise<ChartLeaderboardData | null> {
+    try {
+        const resp = await authFetch(
+            `/api/game/pt/chart-leaderboard?chart_id=${encodeURIComponent(chartId)}`
+        );
+        if (!resp.ok) return null;
+        return (await resp.json()) as ChartLeaderboardData;
     } catch {
         return null;
     }
@@ -170,6 +207,7 @@ export const ptServer = {
     queueRecord,
     flushPending,
     fetchLeaderboard,
+    fetchChartLeaderboard,
     fetchMyStats,
     refreshLocalPlayerRks,
 };
