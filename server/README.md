@@ -19,13 +19,45 @@ repository root first). Without a build it serves the API only.
 
 ## Adding charts
 
+There is intentionally **no web upload**: chart files are placed on the server
+directly by the operator, either as packages or through the bulk fetch tool.
+
+### Bulk Phigros chart library (recommended)
+
+```bash
+python tools/fetch_phigros_charts.py            # full library (~1 GB, one-off)
+python tools/fetch_phigros_charts.py --limit 3  # smoke test
+python tools/fetch_phigros_charts.py --force    # re-download everything
+```
+
+The tool pulls the whole Phigros chart set from the community-extracted archive
+[7aGiven/Phigros_Resource](https://github.com/7aGiven/Phigros_Resource) into
+`data/charts-lib/`. GitHub is not reachable reliably from mainland China, so
+downloads go through a chain of public GitHub mirrors (`--mirrors` overrides it,
+`--direct` skips it); re-running the tool is safe — existing files are kept and
+only missing ones are fetched, so it doubles as an update/repair pass.
+
+Layout (one audio + one cover per song, one JSON per difficulty — a song's
+different difficulties **never duplicate the audio**):
+
+```
+data/charts-lib/<songID>/
+    meta.json          name, composer, illustrator, per-difficulty rating/charter
+    music.ogg
+    illustration.png
+    EZ.json HD.json IN.json [AT.json]
+```
+
+Each song x difficulty is listed in-game as a virtual `<songID>.<LEVEL>.pez` and
+packed into a real .pez on demand when a player downloads it (the packing
+reuses the shared audio, so the server never stores it twice).
+
+### Manual packages
+
 Put `.pez` / `.zip` chart packages into `data/charts/` (created automatically).
 In the game, open *Chart Management* and hit *Refresh*; players can then
 download packages into their browser cache. Packages are validated on listing —
 a broken zip (missing chart JSON / audio) is flagged and cannot be downloaded.
-
-There is intentionally **no web upload**: chart files are placed on the server
-directly by the operator.
 
 ## Configuration (environment variables)
 
@@ -50,8 +82,12 @@ All endpoints are under `/api`; authentication is `Authorization: Bearer <jwt>`
 - `POST /api/auth/login` `{username, password}` → `{access_token, refresh_token}`
 - `POST /api/auth/refresh` `{refresh_token}` → new token pair
 - `GET  /api/auth/me` → `{id, username, nickname, is_admin}`
-- `GET  /api/game/charts` → `{charts: [{name, path, size, valid, error}]}`
+- `GET  /api/game/charts` → `{charts: [{name, path, size, valid, error, source,
+  song_id, song_name, composer, illustrator, charter, level, rating, cover}]}` —
+  merged view of manual packages (`source: "file"`) and shared-library entries
+  (`source: "lib"`, virtual `<songID>.<LEVEL>.pez` built on demand)
 - `GET  /api/game/charts/{filename}` → chart package download
+- `GET  /api/game/covers/{song_id}` → cover art of a shared-library song
 - `POST /api/game/pt/records` `{chart_id, song_name, difficulty, rating, score, acc, is_fc}` —
   upserts the caller's best score per chart
 - `GET  /api/game/pt/leaderboard` → `{entries: [{user_id, name, rks, plays}], my_rank, my_rks}`

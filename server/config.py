@@ -80,6 +80,10 @@ class Settings:
         self.data_dir: str = os.environ.get("PT_DATA_DIR") or _default_data_dir()
         self.db_path: str = str(Path(self.data_dir) / "phitogether.db")
         self.charts_dir: str = str(Path(self.data_dir) / "charts")
+        # Shared chart library written by tools/fetch_phigros_charts.py: one
+        # audio/cover per song plus one JSON per difficulty, packed into .pez
+        # downloads on demand. See server/README.md.
+        self.charts_lib_dir: str = str(Path(self.data_dir) / "charts-lib")
         self.jwt_secret: str = _resolve_jwt_secret(self.data_dir)
         self.jwt_access_expire_minutes: int = 15
         self.jwt_refresh_expire_days: int = 7
