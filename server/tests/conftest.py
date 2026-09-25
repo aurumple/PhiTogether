@@ -13,12 +13,17 @@ def isolated_data_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("PT_JWT_SECRET", "test-secret-0123456789-0123456789-abcdef")
     import config
     config._settings_singleton = None
-    # Validation cache is module-global and keyed by filename; drop cross-test state.
+    # Caches are module-global and keyed by filename/relative path; drop
+    # cross-test state so ids from one temp data dir never leak into another.
     from routers import game as game_module
     game_module._chart_validation_cache.clear()
+    game_module._lib_chart_id_cache.clear()
+    game_module._lib_chart_ids_loaded = False
     yield tmp_path
     config._settings_singleton = None
     game_module._chart_validation_cache.clear()
+    game_module._lib_chart_id_cache.clear()
+    game_module._lib_chart_ids_loaded = False
 
 
 @pytest_asyncio.fixture

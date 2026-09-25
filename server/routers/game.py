@@ -8,10 +8,13 @@ is listed as a virtual ``<songID>.<LEVEL>.pez`` and packed into a real .pez on
 demand, so the same audio is never stored twice.
 
 Leaderboard math (aligned with the PhiZone rks convention):
-per-chart rks = rating * (acc/100)^2, player rks = mean of the best 30 charts.
-Score merge rule matches the game's local best-record logic: higher score wins,
-then accuracy, then full-combo.
+per-chart rks = rating * (best_acc/100)^2 where best_acc is the highest accuracy
+ever achieved, player rks = mean of the best 30 charts. Records keep one "best
+run" per (user, chart): the run maximizing (score, acc, is_fc) — the per-chart
+leaderboard ranks by that key (score, then accuracy, then FC; identical keys
+share a rank).
 """
+import hashlib
 import io
 import json
 import zipfile
@@ -75,6 +78,18 @@ def _parse_info_txt(text: str) -> dict:
     return meta
 
 
+def _chart_id_from_bytes(data: bytes) -> str:
+    """Client-side chart id: md5 over the UTF-8 text of the chart JSON.
+
+    The client hashes ``TextDecoder("utf-8").decode(bytes)`` (which strips a
+    leading BOM), so the same file hashed here yields the same id and imported
+    charts join the same per-chart leaderboard everywhere.
+    """
+    if data.startswith(b"\xef\xbb\xbf"):
+        data = data[3:]
+    return hashlib.md5(data).hexdigest()
+
+
 def _validate_chart_package(path: Path) -> tuple[bool, str, dict]:
     try:
         with zipfile.ZipFile(path) as zf:
@@ -87,15 +102,17 @@ def _validate_chart_package(path: Path) -> tuple[bool, str, dict]:
                 return False, "no chart JSON inside the package", {}
             if not audio_names:
                 return False, "no audio file inside the package", {}
-            # Multiple JSONs: the largest one is most likely the chart itself.
-            target = max(json_names, key=lambda n: zf.getinfo(n).file_size)
+            # The client's importer (extractPez) keeps the last JSON in zip order
+            # as the chart; hash and validate exactly that file.
+            target = json_names[-1]
             with zf.open(target) as f:
-                json.loads(f.read().decode("utf-8"))
-            meta: dict = {}
+                chart_bytes = f.read()
+            json.loads(chart_bytes.decode("utf-8"))
+            meta: dict = {"chart_id": _chart_id_from_bytes(chart_bytes)}
             for i in infos:
                 if i.filename.lower().endswith("info.txt"):
                     with zf.open(i) as f:
-                        meta = _parse_info_txt(f.read().decode("utf-8", errors="replace"))
+                        meta.update(_parse_info_txt(f.read().decode("utf-8", errors="replace")))
                     break
         return True, "", meta
     except zipfile.BadZipFile:
@@ -144,6 +161,51 @@ def _load_lib_meta(song_dir: Path) -> dict | None:
         return None
 
 
+# md5 chart ids for shared-library JSONs, keyed by (mtime_ns, size) and persisted
+# so a cold start does not re-hash hundreds of MB of chart data.
+_lib_chart_id_cache: dict[str, tuple[int, int, str]] = {}
+_lib_chart_ids_loaded = False
+
+
+def _lib_chart_ids_path() -> Path:
+    return Path(get_settings().data_dir) / "chart_ids.json"
+
+
+def _lib_chart_id(chart_file: Path) -> str:
+    global _lib_chart_ids_loaded
+    stat = chart_file.stat()
+    try:
+        key = str(chart_file.relative_to(get_charts_lib_dir()))
+    except ValueError:
+        key = chart_file.name
+    cached = _lib_chart_id_cache.get(key)
+    if cached and cached[0] == stat.st_mtime_ns and cached[1] == stat.st_size:
+        return cached[2]
+    if not _lib_chart_ids_loaded:
+        try:
+            raw = json.loads(_lib_chart_ids_path().read_text(encoding="utf-8"))
+            for k, v in raw.items():
+                _lib_chart_id_cache[k] = (int(v["m"]), int(v["s"]), str(v["id"]))
+        except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+            pass
+        _lib_chart_ids_loaded = True
+        cached = _lib_chart_id_cache.get(key)
+        if cached and cached[0] == stat.st_mtime_ns and cached[1] == stat.st_size:
+            return cached[2]
+    chart_id = _chart_id_from_bytes(chart_file.read_bytes())
+    _lib_chart_id_cache[key] = (stat.st_mtime_ns, stat.st_size, chart_id)
+    try:
+        payload = {
+            k: {"m": v[0], "s": v[1], "id": v[2]} for k, v in _lib_chart_id_cache.items()
+        }
+        _lib_chart_ids_path().write_text(
+            json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+        )
+    except OSError:
+        pass  # cache stays in memory; recomputed on the next start
+    return chart_id
+
+
 @router.get("/charts")
 async def list_charts(user=Depends(get_current_user)):
     """List every downloadable chart with metadata for the song browser.
@@ -180,6 +242,7 @@ async def list_charts(user=Depends(get_current_user)):
                     "charter": meta.get("charter", ""),
                     "level": meta.get("level", ""),
                     "rating": meta.get("rating", 0.0),
+                    "chart_id": meta.get("chart_id", ""),
                     "cover": None,
                     "chapter": "",
                     "chapter_order": 999,
@@ -214,6 +277,7 @@ async def list_charts(user=Depends(get_current_user)):
                 "charter": chart.get("charter", ""),
                 "level": level,
                 "rating": float(chart.get("rating") or 0),
+                "chart_id": _lib_chart_id(chart_file),
                 "cover": f"/api/game/covers/{song_id}" if cover.is_file() else None,
                 "chapter": meta.get("chapter", ""),
                 "chapter_order": meta.get("chapter_order", 999),
@@ -325,8 +389,12 @@ class PTRecordRequest(BaseModel):
     difficulty: str = Field(default="", max_length=50)
     rating: float = Field(default=0, ge=0, le=50)
     score: int = Field(default=0, ge=0, le=10**9)
-    acc: float = Field(default=0, ge=0, le=100)
+    acc: float = Field(default=0, ge=0, le=100)  # accuracy of the best run (%)
     is_fc: bool = False
+    # Highest accuracy ever achieved on the chart (%); rks input. Optional for
+    # older clients whose acc already carried that merged value.
+    max_acc: float | None = Field(default=None, ge=0, le=100)
+    run_at: str | None = Field(default=None, max_length=40)  # when the run happened
 
 
 def _record_rank_key(score: int, acc: float, is_fc: bool):
@@ -335,27 +403,46 @@ def _record_rank_key(score: int, acc: float, is_fc: bool):
 
 @router.post("/pt/records")
 async def submit_pt_record(body: PTRecordRequest, user=Depends(get_current_user), db=Depends(get_db)):
-    """Upsert the caller's best score for a chart and compute its rks."""
-    chart_rks = _chart_rks(body.rating, body.acc)
+    """Upsert the caller's best run for a chart and maintain its rks.
+
+    score/acc/is_fc describe the best run (max of the (score, acc, is_fc) key).
+    ``max_acc`` is tracked separately so rks keeps using the highest accuracy
+    ever achieved even when that accuracy came from a different run.
+    """
+    best_acc = body.max_acc if body.max_acc is not None else body.acc
     cur = await db.execute(
-        "SELECT score, acc, is_fc FROM pt_best_records WHERE user_id = ? AND chart_id = ?",
+        "SELECT score, acc, is_fc, best_acc FROM pt_best_records WHERE user_id = ? AND chart_id = ?",
         (user["id"], body.chart_id),
     )
     old = await cur.fetchone()
     improved = old is None or _record_rank_key(body.score, body.acc, body.is_fc) > _record_rank_key(
         old["score"], old["acc"], bool(old["is_fc"])
     )
+    if old is not None:
+        best_acc = max(best_acc, old["best_acc"] or old["acc"])
+    chart_rks = _chart_rks(body.rating, best_acc)
     if improved:
         await db.execute(
             """INSERT INTO pt_best_records
-               (user_id, chart_id, song_name, difficulty, rating, score, acc, is_fc, chart_rks, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+               (user_id, chart_id, song_name, difficulty, rating,
+                score, acc, is_fc, best_acc, run_at, chart_rks, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')), ?, datetime('now'))
                ON CONFLICT(user_id, chart_id) DO UPDATE SET
                  song_name=excluded.song_name, difficulty=excluded.difficulty, rating=excluded.rating,
                  score=excluded.score, acc=excluded.acc, is_fc=excluded.is_fc,
+                 best_acc=excluded.best_acc, run_at=excluded.run_at,
                  chart_rks=excluded.chart_rks, updated_at=excluded.updated_at""",
             (user["id"], body.chart_id, body.song_name, body.difficulty,
-             body.rating, body.score, body.acc, 1 if body.is_fc else 0, chart_rks),
+             body.rating, body.score, body.acc, 1 if body.is_fc else 0,
+             best_acc, body.run_at, chart_rks),
+        )
+        await db.commit()
+    elif best_acc > (old["best_acc"] or old["acc"]):
+        # A higher-accuracy run that is not the best run: rks still improves.
+        await db.execute(
+            """UPDATE pt_best_records SET best_acc = ?, chart_rks = ?, updated_at = datetime('now')
+               WHERE user_id = ? AND chart_id = ?""",
+            (best_acc, chart_rks, user["id"], body.chart_id),
         )
         await db.commit()
     return {
@@ -364,18 +451,26 @@ async def submit_pt_record(body: PTRecordRequest, user=Depends(get_current_user)
         "record": {
             "chart_id": body.chart_id, "song_name": body.song_name, "difficulty": body.difficulty,
             "rating": body.rating, "score": body.score, "acc": body.acc,
-            "is_fc": body.is_fc, "chart_rks": chart_rks,
+            "is_fc": body.is_fc, "best_acc": best_acc, "run_at": body.run_at,
+            "chart_rks": chart_rks,
         },
     }
 
 
-async def _user_rks_rows(db, user_id: int | None = None):
+async def _user_rks_rows(db, user_id: int | None = None, only: set[int] | None = None):
     """Mean-of-best-30 rks; user_id=None covers everyone (leaderboard)."""
     condition = f"t.rn <= {PT_BEST_LIMIT}"
-    params: tuple = ()
+    params: list = []
     if user_id is not None:
         condition = f"t.user_id = ? AND {condition}"
-        params = (user_id,)
+        params.append(user_id)
+    if only is not None:
+        if not only:
+            return {}
+        condition = (
+            f"t.user_id IN ({','.join('?' * len(only))}) AND {condition}"
+        )
+        params.extend(sorted(only))
     cur = await db.execute(
         f"""SELECT t.user_id, AVG(t.chart_rks) AS rks, COUNT(*) AS plays
             FROM (SELECT user_id, chart_rks,
@@ -413,11 +508,70 @@ async def pt_leaderboard(user=Depends(get_current_user), db=Depends(get_db)):
     }
 
 
+@router.get("/pt/chart-leaderboard")
+async def chart_leaderboard(chart_id: str, user=Depends(get_current_user), db=Depends(get_db)):
+    """Top-10 ranks of one chart plus the caller's own standing.
+
+    Rows are ranked by the best-run key (score, acc, is_fc); identical keys share
+    a rank (competition ranking, e.g. 1,2,2,4), so "top 10" is ten rank numbers
+    and may cover more than ten rows when the cut-off rank is shared.
+    """
+    cur = await db.execute(
+        "SELECT user_id, score, acc, is_fc, run_at FROM pt_best_records WHERE chart_id = ?",
+        (chart_id,),
+    )
+    rows = [dict(r) for r in await cur.fetchall()]
+    rows.sort(key=lambda r: (r["score"], r["acc"], 1 if r["is_fc"] else 0), reverse=True)
+    ranked: list[dict] = []
+    prev_key: tuple | None = None
+    rank = 0
+    for i, row in enumerate(rows):
+        key = (row["score"], row["acc"], row["is_fc"])
+        if key != prev_key:
+            rank = i + 1
+            prev_key = key
+        row["rank"] = rank
+        ranked.append(row)
+
+    me_row = next((r for r in ranked if r["user_id"] == user["id"]), None)
+    top = [r for r in ranked if r["rank"] <= 10]
+
+    stats = await _user_rks_rows(db, only={r["user_id"] for r in top} | ({me_row["user_id"]} if me_row else set()))
+    names: dict[int, str] = {}
+    if stats:
+        cur = await db.execute(
+            "SELECT id, username, nickname FROM users WHERE id IN "
+            f"({','.join('?' * len(stats))})",
+            tuple(stats.keys()),
+        )
+        names = {row["id"]: (row["nickname"] or row["username"]) for row in await cur.fetchall()}
+
+    def fmt(row: dict) -> dict:
+        return {
+            "rank": row["rank"],
+            "user_id": row["user_id"],
+            "name": names.get(row["user_id"], f"user{row['user_id']}"),
+            "score": row["score"],
+            "acc": row["acc"],
+            "is_fc": bool(row["is_fc"]),
+            "run_at": row["run_at"],
+            "rks": round(stats[row["user_id"]]["rks"], 4) if row["user_id"] in stats else 0.0,
+            "is_me": row["user_id"] == user["id"],
+        }
+
+    return {
+        "chart_id": chart_id,
+        "entries": [fmt(r) for r in top],
+        "me": fmt(me_row) if me_row else None,
+    }
+
+
 @router.get("/pt/me")
 async def my_pt_records(user=Depends(get_current_user), db=Depends(get_db)):
     """The caller's best-30 detail rows plus overall rks."""
     cur = await db.execute(
-        """SELECT chart_id, song_name, difficulty, rating, score, acc, is_fc, chart_rks, updated_at
+        """SELECT chart_id, song_name, difficulty, rating, score, acc, is_fc,
+                  best_acc, run_at, chart_rks, updated_at
            FROM pt_best_records WHERE user_id = ?
            ORDER BY chart_rks DESC LIMIT ?""",
         (user["id"], PT_BEST_LIMIT),

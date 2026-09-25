@@ -1,4 +1,5 @@
 """Chart discovery + download endpoints."""
+import hashlib
 import io
 import json
 import zipfile
@@ -45,9 +46,36 @@ async def test_list_charts_with_validation_verdicts(client, tmp_path):
     assert items["good.pez"]["valid"] is True
     assert items["good.pez"]["path"] == "/api/game/charts/good.pez"
     assert items["good.pez"]["size"] > 0
+    # chart_id mirrors the client's id: md5 of the chart JSON text
+    assert items["good.pez"]["chart_id"] == hashlib.md5(
+        json.dumps({"formatVersion": 1}).encode("utf-8")
+    ).hexdigest()
     assert items["broken.pez"]["valid"] is False
     assert "audio" in items["broken.pez"]["error"]
     assert items["notazip.pez"]["valid"] is False
+
+
+async def test_chart_id_uses_last_json_like_the_client(client):
+    _, headers = await register_and_login(client)
+    from routers.game import get_charts_dir
+
+    charts_dir = get_charts_dir()
+    charts_dir.mkdir(parents=True, exist_ok=True)
+    # The client's importer keeps the last .json in zip order as the chart;
+    # the id must be taken from that same file.
+    first = json.dumps({"formatVersion": 1, "tag": "decoy"}).encode("utf-8")
+    last = json.dumps({"formatVersion": 3, "judgeLineList": []}).encode("utf-8")
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("a_first.json", first)
+        zf.writestr("z_last.json", last)
+        zf.writestr("song.mp3", b"fake-audio")
+    (charts_dir / "two.pez").write_bytes(buf.getvalue())
+
+    resp = await client.get("/api/game/charts", headers=headers)
+    items = {c["name"]: c for c in resp.json()["charts"]}
+    assert items["two.pez"]["valid"] is True
+    assert items["two.pez"]["chart_id"] == hashlib.md5(last).hexdigest()
 
 
 async def test_download_chart_file(client):

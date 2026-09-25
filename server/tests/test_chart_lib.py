@@ -1,4 +1,5 @@
 """Shared chart library: virtual .pez listing, on-demand packing, covers."""
+import hashlib
 import io
 import json
 import zipfile
@@ -59,6 +60,10 @@ async def test_list_charts_merges_shared_lib(client):
     assert ez["path"] == "/api/game/charts/Test.Song.EZ.pez"
     assert ez["chapter"] == "Chapter 5 霓虹灯牌"
     assert ez["chapter_order"] == 1
+    # chart_id mirrors the client's id: md5 of the chart JSON text
+    assert ez["chart_id"] == hashlib.md5(
+        json.dumps({"formatVersion": 3, "judgeLineList": []}).encode("utf-8")
+    ).hexdigest()
 
 
 async def test_list_charts_includes_chapter_index(client):
