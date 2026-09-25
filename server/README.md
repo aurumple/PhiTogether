@@ -52,6 +52,14 @@ Each song x difficulty is listed in-game as a virtual `<songID>.<LEVEL>.pez` and
 packed into a real .pez on demand when a player downloads it (the packing
 reuses the shared audio, so the server never stores it twice).
 
+Songs are stamped with their in-game Phigros chapter (Chapter Legacy, Side
+Stories, collaboration packs, 单曲精选集…) from `tools/phigros_chapters.json`,
+which the client uses to group the single-player song list (chapter-less hidden
+charts land in 「隐秘」, everything unmatched in 「其他」). Regenerate the mapping
+after new chapters ship with `python tools/build_chapters.py` (cross-references
+community datasets through the same mirror chain), then re-run the fetch tool
+to refresh the meta files (downloads are skipped).
+
 ### Manual packages
 
 Put `.pez` / `.zip` chart packages into `data/charts/` (created automatically).
@@ -83,9 +91,11 @@ All endpoints are under `/api`; authentication is `Authorization: Bearer <jwt>`
 - `POST /api/auth/refresh` `{refresh_token}` → new token pair
 - `GET  /api/auth/me` → `{id, username, nickname, is_admin}`
 - `GET  /api/game/charts` → `{charts: [{name, path, size, valid, error, source,
-  song_id, song_name, composer, illustrator, charter, level, rating, cover}]}` —
+  song_id, song_name, composer, illustrator, charter, level, rating, cover,
+  chapter, chapter_order}], chapters: [{id, name, order}]}` —
   merged view of manual packages (`source: "file"`) and shared-library entries
-  (`source: "lib"`, virtual `<songID>.<LEVEL>.pez` built on demand)
+  (`source: "lib"`, virtual `<songID>.<LEVEL>.pez` built on demand), plus the
+  chapter index from `tools/phigros_chapters.json`
 - `GET  /api/game/charts/{filename}` → chart package download
 - `GET  /api/game/covers/{song_id}` → cover art of a shared-library song
 - `POST /api/game/pt/records` `{chart_id, song_name, difficulty, rating, score, acc, is_fc}` —

@@ -22,7 +22,9 @@ async def test_list_charts_empty_when_no_dir(client):
     _, headers = await register_and_login(client)
     resp = await client.get("/api/game/charts", headers=headers)
     assert resp.status_code == 200
-    assert resp.json() == {"charts": []}
+    body = resp.json()
+    assert body["charts"] == []
+    assert isinstance(body["chapters"], list)
 
 
 async def test_list_charts_with_validation_verdicts(client, tmp_path):

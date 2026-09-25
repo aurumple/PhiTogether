@@ -123,6 +123,20 @@ def _lib_song_dirs() -> list[Path]:
     return [d for d in lib_dir.iterdir() if d.is_dir() and (d / "meta.json").is_file()]
 
 
+def _load_chapter_index() -> list[dict]:
+    """Ordered chapter list from tools/phigros_chapters.json (empty if absent)."""
+    try:
+        data = json.loads(Path(get_settings().chapters_file).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    chapters = data.get("chapters", [])
+    chapters.sort(key=lambda c: c.get("order", 999))
+    return [
+        {"id": c.get("id", ""), "name": c.get("name", ""), "order": c.get("order", 999)}
+        for c in chapters
+    ]
+
+
 def _load_lib_meta(song_dir: Path) -> dict | None:
     try:
         return json.loads((song_dir / "meta.json").read_text(encoding="utf-8"))
@@ -167,6 +181,8 @@ async def list_charts(user=Depends(get_current_user)):
                     "level": meta.get("level", ""),
                     "rating": meta.get("rating", 0.0),
                     "cover": None,
+                    "chapter": "",
+                    "chapter_order": 999,
                 })
     for song_dir in _lib_song_dirs():
         meta = _load_lib_meta(song_dir)
@@ -199,8 +215,10 @@ async def list_charts(user=Depends(get_current_user)):
                 "level": level,
                 "rating": float(chart.get("rating") or 0),
                 "cover": f"/api/game/covers/{song_id}" if cover.is_file() else None,
+                "chapter": meta.get("chapter", ""),
+                "chapter_order": meta.get("chapter_order", 999),
             })
-    return {"charts": charts}
+    return {"charts": charts, "chapters": _load_chapter_index()}
 
 
 def _parse_lib_filename(filename: str) -> tuple[str, str] | None:

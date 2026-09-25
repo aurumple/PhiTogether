@@ -28,6 +28,8 @@ def make_lib_song(song_id="Test.Song", levels=("EZ", "IN"), with_music=True):
                 "composer": "Composer",
                 "illustrator": "Illustrator",
                 "charts": charts,
+                "chapter": "Chapter 5 霓虹灯牌",
+                "chapter_order": 1,
             }
         ),
         encoding="utf-8",
@@ -55,6 +57,20 @@ async def test_list_charts_merges_shared_lib(client):
     assert ez["cover"] == "/api/game/covers/Test.Song"
     assert ez["size"] > 0
     assert ez["path"] == "/api/game/charts/Test.Song.EZ.pez"
+    assert ez["chapter"] == "Chapter 5 霓虹灯牌"
+    assert ez["chapter_order"] == 1
+
+
+async def test_list_charts_includes_chapter_index(client):
+    _, headers = await register_and_login(client)
+
+    resp = await client.get("/api/game/charts", headers=headers)
+    assert resp.status_code == 200
+    chapters = resp.json()["chapters"]
+    assert isinstance(chapters, list)
+    # the shipped reference data always defines these three buckets
+    names = [c["name"] for c in chapters]
+    assert "单曲精选集" in names and "隐秘" in names and "其他" in names
 
 
 async def test_download_virtual_pez_packs_shared_audio(client):
@@ -99,7 +115,7 @@ async def test_song_without_music_is_not_listed(client):
     make_lib_song(with_music=False)
 
     resp = await client.get("/api/game/charts", headers=headers)
-    assert resp.json() == {"charts": []}
+    assert resp.json()["charts"] == []
 
 
 async def test_cover_endpoint(client):

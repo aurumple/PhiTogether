@@ -1,0 +1,569 @@
+{
+ "version": 1,
+ "generated_at": "2026-09-25",
+ "chapters": [
+  {
+   "id": "legacy",
+   "name": "Chapter Legacy 过去的章节",
+   "order": 0,
+   "songs": [
+    "Glaciaxion.SunsetRay",
+    "EradicationCatastrophe.NceS",
+    "Credits.Frums",
+    "Dlyrotz.Likey",
+    "EnginexStartmelodymix.CrossingSound",
+    "光.姜米條",
+    "Wintercube.CtymaxfeatNceS",
+    "Cipher20.TetrajectoryfeatCtymax",
+    "混乱Confusion.OnlyMyBlackScore",
+    "FULiAUTOSHOOTER.MYUKKE",
+    "HumaN.SOTUI",
+    "PRAW.Bluewind",
+    "PixelRebelz.Normal1zer",
+    "Cereris.SunsetRayNceS",
+    "NonMelodicRagezMUGEdit.Normal1zer",
+    "SultanRage.MonstDeath",
+    "ClassMemories.AntistarfeatCtymax",
+    "SURREALISM.Itsuki",
+    "BonusTime.MegaloPaleWhite",
+    "ENERGYSYNERGYMATRIX.Tanchiky"
+   ]
+  },
+  {
+   "id": "ch5",
+   "name": "Chapter 5 霓虹灯牌",
+   "order": 1,
+   "songs": [
+    "NYA.FLuoRiTe姜米條",
+    "JunXionBetweenLifeAndDeathVIPMix.1N6Fs",
+    "cryout.JuE",
+    "Reimei.影虎",
+    "尊師TheGuru.rider",
+    "Spasmodic.姜米條颶風元力上人",
+    "LeaveAllBehind.rider"
+   ]
+  },
+  {
+   "id": "ch6",
+   "name": "Chapter 6 方舟蜃景",
+   "order": 2,
+   "songs": [
+    "ColorfulDays.P4koofeatつゆり花鈴",
+    "microwav.dandeless",
+    "重生.姜米條",
+    "NOONEYESMAN.MYUKKE",
+    "望影の方舟Six.SeURa",
+    "Igallta.SeURa"
+   ]
+  },
+  {
+   "id": "ch7",
+   "name": "Chapter 7 时钟链接",
+   "order": 3,
+   "songs": [
+    "ClockParadox.WyvernP",
+    "Chronologika.Hundotte",
+    "NickofTime.P4koo",
+    "Chronomia.Lime",
+    "ChronosCollapseLaCampanella.SunsetRay",
+    "Rrharil.TeamGrimoire"
+   ]
+  },
+  {
+   "id": "ch8",
+   "name": "Chapter 8 凌日潮汐",
+   "order": 4,
+   "songs": [
+    "CraveWave.LandRoot",
+    "TheChariotREVIIVAL.Attoclef",
+    "Luminescence.米虾Fomiki初云CLoudie",
+    "Retribution.nmyKryexe",
+    "DESTRUCTION321.Normal1zervsBrokenNerdz",
+    "DistortedFate.Sakuzyo"
+   ]
+  },
+  {
+   "id": "ch9",
+   "name": "Chapter 9 穹顶孤舟",
+   "order": 5,
+   "songs": []
+  },
+  {
+   "id": "ss1",
+   "name": "Side Story 1 忘忧宫",
+   "order": 6,
+   "songs": [
+    "Poseidon.1112vsStar",
+    "WATER.A39沙包P",
+    "MiracleForestVIPMix.Rinthlive",
+    "MOBILYS.Dachs",
+    "Lyrith迷宮リリス.ユメミド"
+   ]
+  },
+  {
+   "id": "ss2",
+   "name": "Side Story 2 弭刻日",
+   "order": 7,
+   "songs": [
+    "Demiurge.Rabpit",
+    "Demonkin.ForgedReigns",
+    "Re_NascencePsystyleVer.Rinth_live",
+    "Ark.kanoryo",
+    "AfterDawn.S9ryne",
+    "INFiNiTEENERZYOverdoze.RekuMochizuki"
+   ]
+  },
+  {
+   "id": "ss3",
+   "name": "Side Story 3 盗乐行",
+   "order": 8,
+   "songs": [
+    "Khalid.Dolphin",
+    "QuantumHyperspace.D_AAN",
+    "FreakyUndulationsNobleKnightsofTune.JehezukielKURORAK",
+    "PANICPARADISE.DJSHIONY",
+    "ReEndofaDream.umavsモリモリあつし"
+   ]
+  },
+  {
+   "id": "ss4",
+   "name": "Side Story 4 无相乡",
+   "order": 9,
+   "songs": [
+    "心の記憶.A39沙包P",
+    "Spotlight.Ardolf",
+    "NightTheater.わかどり",
+    "Ramification.rareguyReina",
+    "DerRichter.Ωμεγα",
+    "ATHAZA.LeaF"
+   ]
+  },
+  {
+   "id": "jixingwei",
+   "name": "极星卫",
+   "order": 10,
+   "songs": [
+    "SATELLITE.かめりあ",
+    "DancewithSilence.かめりあ",
+    "LabyrinthinKowloonWalledWorld.かめりあ",
+    "ComputeItWithSomeDevilishAlcoholicSteampunkEngines.かめりあ",
+    "ERABYECONNEC10N.かめりあ"
+   ]
+  },
+  {
+   "id": "ex-rising",
+   "name": "Chapter Ex-Rising Sun Traxx 精选集",
+   "order": 11,
+   "songs": [
+    "AnotherMe.NeutralMoon",
+    "mechanted.rareguy",
+    "lifeflashesbeforeweebeyes.BilliumMoto",
+    "BreakThroughTheBarrier.lixound",
+    "Chronostasis.黒皇帝"
+   ]
+  },
+  {
+   "id": "ex-hyun",
+   "name": "Chapter Ex-HyuN 精选集",
+   "order": 12,
+   "songs": [
+    "InfinityHeaven.HyuN",
+    "Disorder.HyuNfeatYURI",
+    "CROSSSOUL.HyuNfeatSyepias"
+   ]
+  },
+  {
+   "id": "ex-good",
+   "name": "Chapter Ex-GOOD 精选集",
+   "order": 13,
+   "songs": [
+    "GOODTEK.EBIMAYO",
+    "GOODBOUNCE.EBIMAYO",
+    "GOODWORLD.EBIMAYO",
+    "GOODFORTUNE.EBIMAYO",
+    "GOODRAGE.EBIMAYO"
+   ]
+  },
+  {
+   "id": "ex-waveat",
+   "name": "Chapter Ex-WAVEAT 精选集",
+   "order": 14,
+   "songs": [
+    "Initialize.iF",
+    "桜樹街道.kozatosnow",
+    "GetReady.iF",
+    "volcanic.DETROakaルゼ"
+   ]
+  },
+  {
+   "id": "ex-musedash",
+   "name": "Chapter Ex-Muse Dash 精选集",
+   "order": 15,
+   "songs": [
+    "XING.ginkiha",
+    "FinalStep.Lime",
+    "Cthugha.USAO"
+   ]
+  },
+  {
+   "id": "ex-kalpa",
+   "name": "Chapter Ex-KALPA 精选集",
+   "order": 16,
+   "songs": [
+    "TimetoNightSkyfeatLeeYuJin.HyuNKLYDIX",
+    "HAZARD.Limpid",
+    "AnotherMe.DAAN",
+    "DontNeverAround.HAMA",
+    "RESSiSTANCE.ぐるたみん",
+    "FlutterEcho.Cansol",
+    "Rebirth.ああああ",
+    "AvataarReincarnationofKalpa.ScarletteakaCrYmson"
+   ]
+  },
+  {
+   "id": "ex-lanota",
+   "name": "Chapter Ex-Lanota 精选集",
+   "order": 17,
+   "songs": [
+    "Apocalypse.アリスシャッハと魔法の楽団",
+    "Protoflicker.Silentroom",
+    "HorizonBlue.NothingButRequiemfeatAikapinChiyoko",
+    "YouaretheMiserable.tpazolite",
+    "Stasis.Maozon"
+   ]
+  },
+  {
+   "id": "ex-jiang",
+   "name": "Chapter Ex-姜米條 精选集",
+   "order": 18,
+   "songs": [
+    "Shadow.SumaiLightvs姜米條",
+    "心之所向.姜米條",
+    "inferior.姜米條"
+   ]
+  },
+  {
+   "id": "ex-chaming",
+   "name": "Chapter Ex-茶鸣拾贰律 精选集",
+   "order": 19,
+   "songs": [
+    "盏茗.茶鸣拾贰律",
+    "青芽.茶鸣拾贰律",
+    "瓷岁.茶鸣拾贰律",
+    "Feast远东之宴.茶鸣拾贰律"
+   ]
+  },
+  {
+   "id": "ex-overrapid",
+   "name": "Chapter Ex-OverRapid 精选集",
+   "order": 20,
+   "songs": [
+    "神話.PicaM2U",
+    "Elúltimobaile.Θ",
+    "Trojan.litmus",
+    "TemporalShifting.LureRabbitVC",
+    "Adastraperaspera.RabbitHouse",
+    "Ajourneytothemoonlight.Yesod"
+   ]
+  },
+  {
+   "id": "ex-rotaeno",
+   "name": "Chapter Ex-Rotaeno 精选集",
+   "order": 21,
+   "songs": [
+    "JourneywithYou.Iris",
+    "SecretIllumination.Yooh",
+    "InvertedWorld.ARForest",
+    "ストレイソウルアラウンド.みーに",
+    "ManifoldHypothesis.cybermisofeattigerlily",
+    "KMoeVIP.ZxNX"
+   ]
+  },
+  {
+   "id": "ex-chunithm",
+   "name": "Chapter Ex-CHUNITHM 精选集",
+   "order": 22,
+   "songs": [
+    "月詠に鳴る.Feryquitousfeat藍月なくる",
+    "TECHNOPOLIS2085.PRASTIKDANCEFLOOR",
+    "祈-我ら神祖と共に歩む者なり-.光吉猛修VS穴山大輔VSKaiVS水野健治VS大国奏音",
+    "玩具狂奏曲終焉.きくお"
+   ]
+  },
+  {
+   "id": "ex-paradigm",
+   "name": "Chapter Ex-Paradigm: Reboot 精选集",
+   "order": 23,
+   "songs": [
+    "零號車輛.seatrus",
+    "Xenolith.Tatsh",
+    "ArtificialExistence.JunKuroda",
+    "IndelibleScar.Noah"
+   ]
+  },
+  {
+   "id": "ex-shinobi",
+   "name": "Chapter Ex-SHINOBI SLASH 精选集",
+   "order": 24,
+   "songs": [
+    "幽世桔梗.Capchiifeatまるもこ",
+    "千紫万紅.r0yvsWABI",
+    "明鏡烈火.MUEvsRekuMochizuki"
+   ]
+  },
+  {
+   "id": "ex-takumi",
+   "name": "Chapter Ex-TAKUMI³ 精选集",
+   "order": 25,
+   "songs": [
+    "Cuvism.Fl00tvsHalv",
+    "iLArtifact.Link0",
+    "atruthseekerCommunicationwithUtopiawillbelost.kuro"
+   ]
+  },
+  {
+   "id": "ex-jiezou",
+   "name": "Chapter Ex-节奏大师 精选集",
+   "order": 26,
+   "songs": [
+    "君往何处QuoVadis.M2U",
+    "暗夜苏醒REANIMATE.Warak",
+    "黄金之城GOLDTOWN.Memme",
+    "双重间谍DoubleAgent.WAVAV",
+    "幻影鬼魅PLEASE.R300K"
+   ]
+  },
+  {
+   "id": "ex-egts",
+   "name": "Chapter Ex-EGTS 精选集",
+   "order": 27,
+   "songs": [
+    "SilenceisGoldenSpeechisGolden.NIWASHI",
+    "FracturedAngel.DJRaisei",
+    "Resolver.Gomadare",
+    "LuminousEntitiesLostHeart.NormalMfeatUsagiDenki",
+    "KIZUNAResolution.TAG",
+    "AbsoluTedisoRdeR.AcuteDisarray"
+   ]
+  },
+  {
+   "id": "ex-immaculee",
+   "name": "Chapter Ex-Immaculée Sekai 精选集",
+   "order": 28,
+   "songs": [
+    "AphroditesChildshortver.RUQOA",
+    "DevIAtiOnshortver.polysha",
+    "NOx.Juggernaut"
+   ]
+  },
+  {
+   "id": "ex-ongeki",
+   "name": "Chapter Ex-オンゲキ 精选集",
+   "order": 29,
+   "songs": [
+    "Radiance.Nhato",
+    "DiamondDust.MasahiroGodspeedAoki",
+    "StardustRAY.kanonevsBlackY"
+   ]
+  },
+  {
+   "id": "ex-maimai",
+   "name": "Chapter Ex-maimai 精选集",
+   "order": 30,
+   "songs": [
+    "アンビバレンス.すりぃ相沢",
+    "Komplexe.雄之助featSennzai",
+    "slips.rintarosoma",
+    "QZKagoRequiem.tpazolite"
+   ]
+  },
+  {
+   "id": "ex-liminality",
+   "name": "Chapter Ex-Liminality 精选集",
+   "order": 31,
+   "songs": [
+    "Xepion.Acotto",
+    "Archidoxen.Se_IRA",
+    "百鬼夜行.SaladSavior"
+   ]
+  },
+  {
+   "id": "ex-cytus2",
+   "name": "Chapter Ex-CYTUS II 精选集",
+   "order": 32,
+   "songs": [
+    "TheWholeRest.KIVΛ",
+    "Cristalisia.onoken",
+    "Hydra.JamesLandinoXAkiraComplex",
+    "Alb.Avans",
+    "Incyde.YbeLL",
+    "彩.MisoilePunch"
+   ]
+  },
+  {
+   "id": "single",
+   "name": "单曲精选集",
+   "order": 33,
+   "songs": [
+    "Doppelganger.LeaF",
+    "もぺもぺ.LeaF",
+    "MARENOL.LeaF",
+    "萤火虫の怨.闫东炜",
+    "万吨匿名信.闫东炜",
+    "风屿.闫东炜",
+    "dBdoll.YUESTEVENuen",
+    "Dash.小红Akane李祥辉",
+    "云女孩.符白牙SiYFics",
+    "DropIt.Asuka",
+    "RIPPER.Friedwav",
+    "Aphasia.闫东炜",
+    "开心病.闫东炜",
+    "華灯爱.闫东炜",
+    "FindMe.Kforest",
+    "Sein.朔Apo11oprogramvsお月さま交響曲ftkuroa荒巻",
+    "狂喜蘭舞.LeaF",
+    "SparkleNewLife.rider",
+    "KhronostasisKatharsis.Halv",
+    "SnowDesert.WyvernP",
+    "Burn.NceS",
+    "Aleph0.LeaF",
+    "NextTime.SaMZIng",
+    "RubbishSorting.CtymaxvsNceS",
+    "DeadSoul.SoundSouler",
+    "SpeedUp.DarTokki",
+    "MagentaPotion.EmoCo",
+    "GetBack.CAP3",
+    "Palescreen.WyvernPfeatMadol",
+    "TheMountainEater.PaulBazooka",
+    "Orthodox.tokiwa",
+    "EndMe.ZxNXasDelaina",
+    "ParallelRetrogressionGameVer.Tetrajectory",
+    "Starduster.Quree",
+    "Electron.ElousFZ",
+    "SIGMA.Kryexe",
+    "HardcoreKwaya.EnFr",
+    "Aventyr.GrandThawRigelTheatre",
+    "Trane.MALVA",
+    "雪降りメリクリ.A39",
+    "CervelleConnexion.SCTL",
+    "modulus.PTB10",
+    "Wavetapper.Frums",
+    "大和撫子WildDances.adapatorvsDRIVE",
+    "Eltaw.Fl00t",
+    "BetterGraphicAnimation.ルゼ",
+    "WithYou.Cashew",
+    "UnorthodoxThoughts.Joulez",
+    "Apocalyptic.ZClaxxSumaiLight",
+    "游园地.椒盐菠萝",
+    "energytrixxx.KAH",
+    "Nhelv.Silentroom",
+    "Arkhei.SeraAmagi",
+    "Kerberos.Zris",
+    "parsey.siqlo",
+    "Concvssion.Halv",
+    "ジングルベルJingleBell.A39沙包P",
+    "Dreamland.z1onkyrrin",
+    "AnotherRound.JustinDai",
+    "996.李化禹",
+    "FutureMind.RayNauticaRekuMochizuki",
+    "Luminescent.Daison",
+    "FULiAUTOBUSTER.MYUKKE",
+    "IMustSayNo.TangJuan",
+    "opia.rN",
+    "いざ参ります.Uskefeat棗いつき",
+    "月下缭乱.月見静華vsLUNARiUM",
+    "OnAndOn.ETIAfeatJenga",
+    "DataErr0r.Cosmograph",
+    "csqn.Aoi",
+    "BraveNotes.TurquoiseDRIVENota",
+    "EternalSnow.AbyssIdols",
+    "RainySeason.AbyssIdols",
+    "ElCondorPasaPhigrosEdit.PlasticFruits",
+    "BreakOver.Kforest",
+    "BelieveLightfeat果丸哒呦.ScalerMestie果丸哒呦",
+    "Pontdessouvenirs.VeetaCrushvsitsufeatitsu",
+    "青丘.BLACK0",
+    "インフェルノシティ.Ponchifeatはぁち",
+    "Upshift.Iriss-Frantzz",
+    "PoisonANDORAffection.LeaF",
+    "Random.SobremSilentroom",
+    "NowIsTheTimeDoIt.RoyMikelate",
+    "Bougainvillea.Jade",
+    "RainyHeart.BelieverInYou阿卡姆巫师",
+    "Realms.HinkikAHimitsu",
+    "ぱぴぷぴぷぴぱ.ころねぽちWith立秋",
+    "TriumphRegret.typeMARS",
+    "DiamondEyes.SYNTHETIC",
+    "Bitterblossom.imvi",
+    "bye.DingerBox",
+    "聖夜讃歌.A39沙包P",
+    "GVNGlitterVomitusandNeon.SaltySaltUnfold33",
+    "CrushBETA.shadow_bling",
+    "BrokenSky.JungoMAX3feat刘佳宜Snow幻影刃shadow",
+    "BRAINHACKER.SOMON",
+    "Antithese.Blacklolita",
+    "PRAGMATISMRESURRECTION.Laur",
+    "ShineAfter.ADeanJocularACE",
+    "Bloom.targ麻团qwq",
+    "今天不是明天.PIKASONICfeat兰音Reine",
+    "BoundedQuietude.FiniteLimitvsSiLiS",
+    "Grimheart.Puru",
+    "Thrashforce.KAHvsE0ri4",
+    "Originally.SNKSMizku",
+    "Schadenfreude.ZxNX",
+    "Letempsperdu.Daison",
+    "FixationsTowardtheStars.Foodbot",
+    "valorstarcross.LundyvsWyvren",
+    "CometFeat符白牙.CNHKSS",
+    "白と黒のバケモノ.テヅカ",
+    "Devotion.Connexio",
+    "KirakiraNoelStory.RekuMochizuki",
+    "Shelter.MeatyRabbitNceS",
+    "蝎虎天体Lacertid.CreamvsDaily天利",
+    "贝多芬祝福BeethovenBlessing.Nauts",
+    "インマイマインド.レシオP",
+    "ニライカナイNiraicA_naiMix.roopfromSTR",
+    "SwingSkipDrop.ミハイル",
+    "宇宙残骸少女CosmicDustyGirl.辻原一郎",
+    "Aliceinaxxxxxxxx.Nagiha",
+    "FrozenHeart.A39沙包P",
+    "Helios.NOABotaNya",
+    "雪降り雪が降っている.AiSSw夜輪ft結月ゆかり",
+    "RetributionCycleofRedemption.ArdolfvsDaily天利",
+    "SolaggyfeatUzumaki.ShrimpCatsはぁち後藤涼輔",
+    "000AinSophAur.Yumeji",
+    "BANGINGSTRIKE.DewPleiades",
+    "最高傑作.PYKAMIA",
+    "Locomotive.K",
+    "彼方へ名もなき海辺より.打打だいず&月乃",
+    "ABYSSMOTION192333.ariiolTSAR奏Sou",
+    "Xenophobia.XinG",
+    "Verruckt.Raimukun",
+    "AfterZABANIYAMUGEdit.Daily天利",
+    "下一秒.BobHouSherlock卓智媛feat兰音Reine",
+    "SnowDance.悠叶いのり",
+    "亂舞.NekockLK",
+    "Cleyera.Riya",
+    "70MinutesFighters.かたぎり",
+    "GungnirFracture.Kryexe",
+    "夢の降る日に.seatrus",
+    "DerSchneid.Ωμεγα",
+    "星拂云锦featkoi.S9ryne",
+    "NWAD.Knighthood",
+    "DevastatingHistory.NAMV"
+   ]
+  },
+  {
+   "id": "hidden",
+   "name": "隐秘",
+   "order": 34,
+   "songs": []
+  },
+  {
+   "id": "other",
+   "name": "其他",
+   "order": 35,
+   "songs": []
+  }
+ ]
+}
