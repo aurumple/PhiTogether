@@ -3,8 +3,12 @@
     import { audio } from "@utils/js/aup";
     import { partyMgr } from "@utils/js/partyMgr";
     import ptdb from "@components/ptdb";
-    import { PhiZoneAPI as phizoneApi } from "@community/phizone";
     import ploading from "@utils/js/ploading.js";
+    import {
+        formatChartLevel,
+        getLocalSongGroupKey,
+        mergeLocalSongCharts,
+    } from "@utils/localChartGrouping.mjs";
     export default {
         name: "chartSelect",
         data() {
@@ -15,14 +19,12 @@
                     illustrator: "",
                 },
                 chartList: {},
-                chapterList: [],
                 beforeSearch: [],
                 beforePagination: [],
                 page: 1,
                 toPage: null,
                 showMoreSearchQueryInput: false,
                 selectChoice: "local",
-                selectChapter: "",
                 forceOffline: false,
                 selectedSongData: null,
                 selectedPlayingSettings: {
@@ -50,36 +52,25 @@
                 return window.spec.isPhiTogetherApp;
             },
             canPrev() {
-                if (["pz", "favorite"].includes(this.selectChoice))
-                    return this.chartList.hasPrevious;
-                else if (["local", "custom"].includes(this.selectChoice)) return this.page - 1 > 0;
+                if (this.selectChoice === "favorite") return this.chartList.hasPrevious;
+                return this.page - 1 > 0;
             },
             canNext() {
-                if (["pz", "favorite"].includes(this.selectChoice)) return this.chartList.hasNext;
-                else if (["local", "custom"].includes(this.selectChoice))
-                    return this.page + 1 <= this.pageAll;
-            },
-            pzResUrlGlobal() {
-                "res.phizone.cn";
-            },
-            customChartServer() {
-                if (shared.game.ptmain.gameConfig.customChartServer === "chart.phitogether.fun")
-                    return "ptc.realtvop.top";
-                return shared.game.ptmain.gameConfig.customChartServer;
+                if (this.selectChoice === "favorite") return this.chartList.hasNext;
+                return this.page + 1 <= this.pageAll;
             },
             pageAll() {
                 try {
-                    if (["pz", "favorite"].includes(this.selectChoice)) {
+                    if (this.selectChoice === "favorite") {
                         const count = this.chartList.total;
                         if (count) {
                             return Math.ceil(count / 32);
                         } else return 1;
-                    } else if (["local", "custom"].includes(this.selectChoice)) {
-                        const count = this.beforePagination.length;
-                        if (count) {
-                            return Math.ceil(count / 32);
-                        } else return 1;
                     }
+                    const count = this.beforePagination.length;
+                    if (count) {
+                        return Math.ceil(count / 32);
+                    } else return 1;
                 } catch (e) {
                     return 1;
                 }
@@ -88,13 +79,17 @@
                 return shared.game.ptmain.gameMode === "single";
             },
             canFav() {
-                return this.selectedSongData && this.selectedSongData.isFromPhiZone;
+                return !!this.selectedSongData;
             },
-            // isFromCustomServer() {
-            //     return !this.canFav && this.selectedSongData.id.includes("|$|");
-            // },
             isMulti() {
                 return shared.game.ptmain.gameMode === "multi";
+            },
+            // 离线且本地无缓存谱面时，给出更有引导性的空状态提示。
+            isEmptyOffline() {
+                return (
+                    this.forceOffline ||
+                    (!navigator.onLine && this.selectChoice === "local")
+                );
             },
         },
         async mounted() {
@@ -113,19 +108,8 @@
                 const page = this.page;
                 this.selectedSongData = null;
                 (() => {
-                    if (this.selectChoice === "pz")
-                        return new Promise(res =>
-                            res((this.chartList.results[indexOfSelectedChart].charts = null))
-                        );
                     if (this.selectChoice === "favorite") return this.loadFavouriteSongs();
-                    return (() => {
-                        if (this.selectChoice === "local") return this.loadOffline();
-                        if (this.selectChoice === "custom")
-                            return this.loadPage(
-                                this.chapterList[this.selectChapter].songsListUrls[0],
-                                true
-                            );
-                    })().then(() => {
+                    return this.loadOffline().then(() => {
                         this.page = page;
                         this.updatePagination();
                     });
@@ -167,6 +151,9 @@
             ploading.r();
             ploading.r("loadChart");
         },
+        unmounted() {
+            this.clearImageCache();
+        },
         beforeRouteLeave(to, from, next) {
             this.scrolledTop = document.querySelector("#songSelectList")
                 ? document.querySelector("#songSelectList").scrollTop
@@ -200,28 +187,19 @@
                     );
                     return;
                 }
-                if (["pz", "favorite"].includes(this.selectChoice)) {
-                    this.loadPagePZv2(i);
-                } else if (["local", "custom"].includes(this.selectChoice)) {
-                    this.page = i;
-                    this.updatePagination();
-                }
+                if (this.selectChoice === "favorite") return;
+                this.page = i;
+                this.updatePagination();
             },
             loadPrevPage() {
-                if (["pz", "favorite"].includes(this.selectChoice))
-                    this.loadPagePZv2(this.page - 1);
-                else if (["local", "custom"].includes(this.selectChoice)) {
-                    this.page = this.page - 1;
-                    this.updatePagination();
-                }
+                if (this.selectChoice === "favorite") return;
+                this.page = this.page - 1;
+                this.updatePagination();
             },
             loadNextPage() {
-                if (["pz", "favorite"].includes(this.selectChoice))
-                    this.loadPagePZv2(this.page + 1);
-                else if (["local", "custom"].includes(this.selectChoice)) {
-                    this.page = this.page + 1;
-                    this.updatePagination();
-                }
+                if (this.selectChoice === "favorite") return;
+                this.page = this.page + 1;
+                this.updatePagination();
             },
             updatePagination() {
                 if (this.page < 1) this.page = 1;
@@ -231,31 +209,50 @@
                         ? this.beforePagination.slice(32 * this.page - 32, 32 * this.page)
                         : [],
                 };
+                if (this.selectChoice === "local") {
+                    const selectedKey = this.selectedSongData
+                        ? getLocalSongGroupKey(this.selectedSongData)
+                        : null;
+                    const selectedSong =
+                        this.chartList.results.find(
+                            song => getLocalSongGroupKey(song) === selectedKey
+                        ) || this.chartList.results[0];
+                    if (selectedSong) {
+                        this.goDetails(selectedSong, false).catch(() => (this.showBlank = false));
+                    } else {
+                        this.selectedSongData = null;
+                        audio.stop();
+                    }
+                }
             },
             async loadOffline() {
-                if (this.forceOffline && this.selectChoice !== "custom")
+                if (this.forceOffline && this.selectChoice !== "favorite")
                     this.selectChoice = "local";
+                // 服务端谱面不再自动全量下载（慢且无进度），改由「谱面下载」页面
+                // （/chartManage）按需选择下载；此处只读本地 IndexedDB 缓存，离线可用。
                 let { results } = await ptdb.chart.renderApi();
                 let newlist = [];
                 for (const t of results) {
                     if (t.song && t.illustration && t.charts) newlist.push(t);
                 }
-                this.beforeSearch = newlist;
+                this.beforeSearch = mergeLocalSongCharts(newlist);
                 this.beforePagination = this.beforeSearch;
                 this.updatePagination();
             },
-            async goDetails(para) {
+            async goDetails(para, allowAutoScroll = true) {
                 if (this.selectedSongData === para) return;
-                const autoScroll = !this.selectedSongData;
-                if (!para.charts || !para.charts.length)
-                    para.charts = await phizoneApi.getSongsChartsAsv1(para.id).catch(e => []);
+                const autoScroll = allowAutoScroll && !this.selectedSongData;
+                if (!para.charts || !para.charts.length) para.charts = [];
                 sessionStorage.setItem("chartDetailsData", JSON.stringify(para));
                 ptdb.chart.song.has(para.id).then(h => (this.canEdit = h));
                 if (autoScroll) {
-                    this.scrolledTop = document.querySelector("#songSelectList").scrollTop;
-                    document.querySelector("#songSelectList").scrollTop =
-                        Math.max((0.39275 * window.innerWidth - 2) * 0.2 + 2, 100) *
-                        this.chartList.results.indexOf(para);
+                    const songList = document.querySelector("#songSelectList");
+                    if (songList) {
+                        this.scrolledTop = songList.scrollTop;
+                        songList.scrollTop =
+                            Math.max((0.39275 * window.innerWidth - 2) * 0.2 + 2, 100) *
+                            this.chartList.results.indexOf(para);
+                    }
                     // setTimeout(() => document.querySelector("#songSelectList").scrollTop = Math.max(0.08 * window.innerWidth, 100) * this.chartList.results.indexOf(para), 100);
                 }
                 this.selectedSongData = para;
@@ -265,22 +262,6 @@
             },
             async playPreview(para) {
                 this.previewAbortController = new AbortController();
-                // const songLink =
-                //     para.song +
-                //     `?type=song&id=${encodeURIComponent(para.id)}&name=${encodeURIComponent(
-                //         para.name
-                //     )}&edition=${encodeURIComponent(
-                //         para.edition
-                //     )}&composer=${encodeURIComponent(
-                //         para.composer
-                //     )}&illustrator=${encodeURIComponent(
-                //         para.illustrator
-                //     )}&bpm=${encodeURIComponent(para.bpm)}&duration=${encodeURIComponent(
-                //         para.duration
-                //     )}&preview_start=${encodeURIComponent(
-                //         para.preview_start || 0
-                //     )}&isFromPhiZone=${this.canFav ? 1 : 0}`;
-                // shared.game.msgHandler.sendMessage("正在加载音频预览...", "info", false);
                 ptdb.chart.song
                     .fetch(para, {
                         signal: this.previewAbortController.signal,
@@ -316,9 +297,13 @@
             },
             doSearch() {
                 if (partyMgr.list.aprfool2024.hook(this.search, this.loadChart)) return;
-                if (this.selectChoice === "pz") {
-                    this.loadPagePZv2(1, true, this.search.name);
-                } else if (["local", "custom"].includes(this.selectChoice)) {
+                if (this.selectChoice === "favorite") {
+                    if (!this.chartList.resultsbak)
+                        this.chartList.resultsbak = this.chartList.results;
+                    this.chartList.results = this.chartList.resultsbak.filter(i =>
+                        i.name.toLowerCase().includes(this.search.name.toLowerCase())
+                    );
+                } else {
                     this.beforePagination = this.beforeSearch.filter(x => {
                         return (
                             x.name.toLowerCase().includes(this.search.name.toLowerCase()) &&
@@ -330,90 +315,10 @@
                     });
                     this.page = 1;
                     this.updatePagination();
-                } else if (["custom", "favorite"].includes(this.selectChoice)) {
-                    if (!this.chartList.resultsbak)
-                        this.chartList.resultsbak = this.chartList.results;
-                    this.chartList.results = this.chartList.resultsbak.filter(i =>
-                        i.name.toLowerCase().includes(this.search.name.toLowerCase())
-                    );
-                }
-            },
-            async loadPage(url, renew = false) {
-                ploading.l(this.$t("chartSelect.loadingChartList"));
-                if (renew) this.page = 1;
-                try {
-                    const chartList = await (await fetch(url)).json();
-                    // if (this.selectChoice === "custom")
-                    //     chartList.results.forEach(
-                    //         (item) => (item.id = `${this.customChartServer}|$|${item.id}`)
-                    //     );
-                    if (this.chartList.previous && url == this.chartList.previous) this.page--;
-                    if (this.chartList.next && url == this.chartList.next) this.page++;
-                    if (this.toPage) (this.page = this.toPage), (this.toPage = null);
-                    // this.chartList = chartList;
-                    chartList.results.reverse(); // 从新到旧
-                    this.beforeSearch = chartList.results;
-                    this.beforePagination = this.beforeSearch;
-                    this.updatePagination();
-                    document.querySelector("#app").scrollTop = 0;
-                    ploading.r();
-                } catch {
-                    shared.game.msgHandler.sendMessage(this.$t("chartSelect.loadFailed"), "error"),
-                        ploading.r();
-                    return;
-                }
-            },
-            async loadPagePZv2(page, renew = false, search) {
-                ploading.l(this.$t("chartSelect.loadingChartList"));
-                if (renew) this.page = page = 1;
-                try {
-                    const chartList = await phizoneApi.getAllSongsAndChartsAsv1(page, search);
-                    this.page = page;
-                    this.chartList = chartList;
-                    document.querySelector("#app").scrollTop = 0;
-                    ploading.r();
-                } catch {
-                    shared.game.msgHandler.sendMessage(this.$t("chartSelect.loadFailed"), "error"),
-                        ploading.r();
-                    return;
-                }
-            },
-            async loadChapters(url) {
-                ploading.l(this.$t("chartSelect.loadingChapterList"));
-                try {
-                    const chapterList = await (
-                        await fetch(
-                            url.replace(
-                                /https?:\/\/api.phi.zone/,
-                                "https://proxy.phitogether.fun/phizoneApi"
-                            )
-                        )
-                    ).json();
-                    this.chapterList = chapterList;
-                    document.querySelector("#app").scrollTop = 0;
-                    this.selectChapter = 0;
-                    this.loadPage(this.chapterList[0].songsListUrls[0], true);
-                    ploading.r();
-                } catch {
-                    shared.game.msgHandler.sendMessage(this.$t("chartSelect.loadFailed"), "error"),
-                        ploading.r();
-                    return;
                 }
             },
             toggleInput() {
                 this.showMoreSearchQueryInput = !this.showMoreSearchQueryInput;
-            },
-            generateFavoriteList() {
-                let favourites = localStorage.getItem("favourites");
-                if (!favourites) return "";
-                else {
-                    let output = "";
-                    favourites = JSON.parse(favourites);
-                    for (let i of favourites) {
-                        output = `${output}${favourites.indexOf(i) === 0 ? "" : ","}${i}`;
-                    }
-                    return output;
-                }
             },
             async loadFavouriteSongs() {
                 ploading.l(this.$t("chartSelect.loadingChartList"));
@@ -435,18 +340,12 @@
                 document.querySelector("#app").scrollTop = 0;
                 ploading.r();
             },
-            toRank(chart) {
-                if (this.previewAbortController)
-                    this.previewAbortController.abort(), (this.previewAbortController = null);
-                audio.stop();
-                sessionStorage.setItem("loadedChart", JSON.stringify(chart));
-                this.$router.push({ path: "/pzRankSingle", query: { id: chart.id } });
-            },
             getDifficultyActual(chartInfo) {
                 if (typeof chartInfo.difficulty === "string" || !chartInfo.difficulty)
                     return chartInfo.difficulty;
                 else return chartInfo.difficulty === 0 ? "?" : Math.floor(chartInfo.difficulty);
             },
+            formatChartLevel,
             toSecond(str) {
                 try {
                     const d = str.split(":");
@@ -474,7 +373,7 @@
                 );
             },
             getLevelColor(levelText) {
-                levelText = levelText.toUpperCase();
+                levelText = levelText.trim().toUpperCase().split(/\s+/)[0];
                 if (levelText === "IN") return "#d31314";
                 if (levelText === "AT") return "#443";
                 if (levelText === "HD") return "#2bf";
@@ -487,9 +386,7 @@
                 if (!chart.userScore) {
                     if (!shared.game.ptmain.gameConfig.ptBestRecords)
                         shared.game.ptmain.gameConfig.ptBestRecords = {};
-                    const scoreData = (chart.isFromPhiZone
-                        ? shared.game.ptmain.gameConfig.account.pzBestRecords || {}
-                        : shared.game.ptmain.gameConfig.ptBestRecords)[chart.id] || [
+                    const scoreData = shared.game.ptmain.gameConfig.ptBestRecords[chart.id] || [
                         0,
                         0,
                         false,
@@ -597,7 +494,7 @@
             async deleteChart() {
                 if (
                     !(await shared.game.msgHandler.confirm(
-                        this.$t("cacheManage.confirmBeforeDelete")
+                        this.$t("chartManage.confirmBeforeDelete")
                     ))
                 )
                     return;
@@ -676,6 +573,14 @@
                     main.appendChild(video);
                 });
             },
+            // 释放缓存里的 blob object URL（不 revoke 会随整页存续泄漏），
+            // 列表刷新与组件销毁时调用
+            clearImageCache() {
+                for (const url of this.imageCache.values()) {
+                    if (url.startsWith("blob:")) URL.revokeObjectURL(url);
+                }
+                this.imageCache.clear();
+            },
             async fetchImage(url) {
                 if (!url.startsWith("/PTVirtual/")) return;
                 if (this.imageCache.has(url)) return this.imageCache.get(url);
@@ -703,11 +608,8 @@
             selectChoice: {
                 handler(newVal, oldVal) {
                     if (oldVal === "empty") this.selectChoice = oldVal;
-                    if (newVal === "pz") this.loadPagePZv2(1, true);
-                    else if (newVal === "local") this.loadOffline();
+                    if (newVal === "local") this.loadOffline();
                     else if (newVal === "favorite") this.loadFavouriteSongs();
-                    else if (newVal === "custom")
-                        this.loadChapters(`https://${this.customChartServer}/chapters.json`);
                     else if (newVal === "empty") this.chartList = [];
                     this.selectedSongData = null;
                     this.scrolledTop = 0;
@@ -715,13 +617,6 @@
                     this.showBlank = false;
                     audio.stop();
                     this.search.name = "";
-                },
-            },
-            selectChapter: {
-                handler(newVal, oldVal) {
-                    this.loadPage(this.chapterList[newVal].songsListUrls[0], true);
-                    this.selectedSongData = null;
-                    audio.stop();
                 },
             },
             favouriteSongs: {
@@ -732,7 +627,7 @@
             },
             "chartList.results": {
                 handler(newVal) {
-                    this.imageCache.clear();
+                    this.clearImageCache();
                     newVal.forEach(chart => {
                         if (chart.illustration) this.fetchImage(chart.illustration);
                     });
@@ -761,55 +656,15 @@
                     <label for="sc1" v-html="$t('chartSelect.songSource.local')"></label>
                 </div>
 
-                <div v-if="!this.forceOffline">
-                    <br />
-                    <input
-                        type="radio"
-                        id="sc2"
-                        name="selectChoice"
-                        v-model="selectChoice"
-                        value="favorite"
-                    />
+                <div>
+                <input
+                    type="radio"
+                    id="sc2"
+                    name="selectChoice"
+                    v-model="selectChoice"
+                    value="favorite"
+                />
                     <label for="sc2" v-html="$t('chartSelect.songSource.favourites')"></label>
-                </div>
-                <div v-if="!this.forceOffline">
-                    <br />
-                    <input
-                        type="radio"
-                        id="sc0"
-                        name="selectChoice"
-                        v-model="selectChoice"
-                        value="pz"
-                    />
-                    <label for="sc0" v-html="$t('chartSelect.songSource.pz')"></label>
-                </div>
-                <div v-if="!this.forceOffline">
-                    <br />
-                    <input
-                        type="radio"
-                        id="sc3"
-                        name="selectChoice"
-                        v-model="selectChoice"
-                        value="custom"
-                    />
-                    <label
-                        for="sc3"
-                        v-if="selectChoice != 'custom' || chapterList.length == 1"
-                        v-html="$t('chartSelect.songSource.pt')"
-                    ></label>
-                    <select
-                        id="sc3.5"
-                        v-model="selectChapter"
-                        v-else
-                        style="height: 5.5vh; width: 9vw; background: #fff; margin-top: -1vh"
-                    >
-                        <option
-                            v-for="chapter in chapterList"
-                            :value="chapterList.indexOf(chapter)"
-                        >
-                            {{ chapter.name["zh-cn"] }}
-                        </option>
-                    </select>
                 </div>
             </div>
         </div>
@@ -833,7 +688,7 @@
                     style="display: flex; height: 35px; position: fixed; z-index: 114"
                 >
                     <a
-                        v-if="selectedSongData"
+                        v-if="selectedSongData && selectChoice !== 'local'"
                         @click="back2song"
                         style="margin-top: 0.75%; margin-right: 0.75%"
                     >
@@ -863,7 +718,22 @@
                     :style="{ overflow: showBlank && !selectedSongData ? 'hidden' : 'scroll' }"
                 >
                     <div v-if="!chartList.results || chartList.results.length == 0">
-                        {{ $t("chartSelect.chartListIsEmpty") }}
+                        {{
+                            selectChoice === "favorite"
+                                ? $t("chartSelect.chartListIsEmptyFavorite")
+                                : isEmptyOffline
+                                ? $t("chartSelect.chartListIsEmptyOffline")
+                                : $t("chartSelect.chartListIsEmpty")
+                        }}
+                        <br />
+                        <br />
+                        <input
+                            v-if="selectChoice === 'local'"
+                            type="button"
+                            :value="$t('chartSelect.goDownloadCharts')"
+                            style="font-size: 1em; width: auto; padding: 0.2em 1em"
+                            @click="$router.push('/chartManage')"
+                        />
                     </div>
                     <!-- new -->
                     <div id="chartListall" :fullwidth="!selectedSongData">
@@ -907,7 +777,7 @@
                                 </div>
                             </div>
                             <div
-                                v-show="selectedSongData"
+                                v-if="selectedSongData"
                                 :style="{
                                     flex: 7,
                                     display: 'flex',
@@ -934,9 +804,7 @@
                                         :style="{ background: getLevelColor(realchart.level) }"
                                     >
                                         <span>
-                                            {{ realchart.level }} Lv.{{
-                                                getDifficultyActual(realchart)
-                                            }}
+                                            {{ formatChartLevel(realchart) }}
                                         </span>
                                     </div>
                                 </div>
@@ -983,7 +851,7 @@
                                     : imageCache.get(selectedSongData.illustration) ||
                                       selectedSongData.illustration
                             "
-                            style="object-fit: cover"
+                            style="object-fit: cover; width: 100%; height: 100%"
                         />
                     </div>
                     <div
@@ -1046,9 +914,7 @@
                                     >
                                         <div style="display: flex; flex: 3; padding-top: 5px">
                                             <div class="chartItemLevel" style="margin-left: 2%">
-                                                {{ chart.level }} Lv.{{
-                                                    getDifficultyActual(chart)
-                                                }}
+                                                {{ formatChartLevel(chart) }}
                                                 {{ chart.ranked ? "Ranked" : "" }}
                                             </div>
                                             <div class="chartItemCharter" style="margin-left: 5%">
@@ -1090,8 +956,6 @@
                                                 </span>
                                             </div>
                                             <div class="play" style="display: block; flex: 10">
-                                                <!-- <input type="button" v-if="isSingle && canFav"
-                                                @click="toRank(chart)" :value="$t('chartSelect.rankings')"> -->
                                                 <input
                                                     type="button"
                                                     @click="loadChart(chart)"
@@ -1187,7 +1051,7 @@
                                     <option value="Slower">
                                         {{ $t("chartSelect.playConfig.speeds.slower") }}
                                     </option>
-                                    <option value="" selected>
+                                    <option value="">
                                         {{ $t("chartSelect.playConfig.speeds.normal") }}
                                     </option>
                                     <option value="Faster">
@@ -1256,7 +1120,8 @@
     }
 
     .songsSourceSelectContainer {
-        display: grid;
+        display: flex;
+        flex-direction: column;
         height: 100%;
         width: 11vw;
         margin-left: -1vw;
@@ -1322,12 +1187,9 @@
 
     .songsSourceSelect {
         display: flex;
-        flex-direction: row;
-        flex-wrap: wrap;
-        justify-content: start;
-        margin-top: 1.2vh;
-        height: 0px;
-        /* overflow: scroll; */
+        flex-direction: column;
+        gap: 1.2vh;
+        padding: 1.2vh 0;
     }
 
     .songsSourceSelect > div input[type="radio"] {
@@ -1335,7 +1197,6 @@
     }
 
     .songsSourceSelect div {
-        display: inline;
         width: 90%;
     }
 
@@ -1348,7 +1209,6 @@
         font-size: 1.5vw;
         padding: min(4.5vh, 25px) 1.5vw;
         line-height: 0;
-        margin-top: -1vh;
     }
 
     .songsSourceSelect div input:checked ~ label {

@@ -1,10 +1,10 @@
 import openDB from "./openDB";
 import { SongMeta, ChartMeta } from "@utils/types/SongAndChartMeta";
-import PhiZoneAPI, { PhiZoneAPI as api, PZApiResponse } from "@community/phizone/api";
 import ObjectStores from "./ObjectStores";
 import { renderPZApiFromCache } from "@components/cacheutils";
 import md5 from "md5";
 
+// 数值是 IndexedDB 里的持久化数据（from 字段），历史取值不可改动/重排
 export enum ChartSource {
     Unknown,
     Local,
@@ -101,11 +101,7 @@ async function downloadSong(
         name: songInfo.name,
         composer: songInfo.composer,
         illustrator: songInfo.composer,
-        from: songInfo.isFromPhiZone
-            ? ChartSource.PhiZone
-            : songInfo.isFromURL
-              ? ChartSource.Unknown
-              : ChartSource.PhiTogether,
+        from: songInfo.isFromURL ? ChartSource.Unknown : ChartSource.PhiTogether,
         songFile: songFile || (await fetch(getNoCacheURL(songInfo.song)).then(f => f.blob())),
         illustrationFile:
             illustrationFile ||
@@ -135,29 +131,23 @@ async function downloadChart(
                 .catch(e => console.error(e));
         else console.log(GetChartFilesError.SongNotFound);
 
-    const source = chartInfo.isFromPhiZone
-        ? ChartSource.PhiZone
-        : chartInfo.isFromURL
-          ? ChartSource.Unknown
-          : ChartSource.PhiTogether;
+    const source = chartInfo.isFromURL ? ChartSource.Unknown : ChartSource.PhiTogether;
     const chartBlob: Blob = chartFile
         ? chartFile instanceof Blob
             ? chartFile
             : await chartFile.blob()
         : await fetch(getNoCacheURL(chartInfo.chart)).then(f => f.blob());
     const assetsFile =
-        source === ChartSource.PhiZone
-            ? await PhiZoneAPI.getChartAssets(chartInfo.id as string)
-            : source === ChartSource.PhiTogether && chartInfo.assets
-              ? [
-                    {
-                        id: "0",
-                        type: -1,
-                        name: "assets.zip",
-                        file: await (await fetch(chartInfo.assets)).blob(),
-                    },
-                ]
-              : undefined;
+        source === ChartSource.PhiTogether && chartInfo.assets
+            ? [
+                  {
+                      id: "0",
+                      type: -1,
+                      name: "assets.zip",
+                      file: await (await fetch(chartInfo.assets)).blob(),
+                  },
+              ]
+            : undefined;
 
     return {
         id: parseCustomServerChartId(chartInfo.id),
@@ -391,7 +381,6 @@ function cachedChart2Meta(cachedChart: CachedChart): ChartMeta<string | number> 
         charter: cachedChart.charter,
         song: cachedChart.song,
         assetsNum: cachedChart.assetsFile ? cachedChart.assetsFile.length : 0,
-        isFromPhiZone: cachedChart.from === ChartSource.PhiZone,
         isFromURL: cachedChart.from === ChartSource.Unknown,
         origin: cachedChart.origin,
     };
@@ -406,7 +395,6 @@ function cachedSong2Meta(cachedSong: CachedSong): SongMeta {
         illustration: `/PTVirtual/db/illustration/${cachedSong.id}`,
         //@ts-ignore
         charts: cachedSong.charts,
-        isFromPhiZone: cachedSong.from === ChartSource.PhiZone,
         isFromURL: cachedSong.from === ChartSource.Unknown,
         origin: cachedSong.origin,
     };

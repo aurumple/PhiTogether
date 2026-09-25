@@ -63,9 +63,7 @@ function parseGameConfig(gameConfig: GameConfig): ParsedGameConfig {
             account: {
                 tokenInfo: null,
                 userBasicInfo: null,
-                defaultConfigID: null,
                 defaultConfig: null,
-                pzBestRecords: null,
             },
             showPoint: false,
             showTimer: false,
@@ -103,7 +101,6 @@ function parseGameConfig(gameConfig: GameConfig): ParsedGameConfig {
             customResourceLink: "",
             autoplay: false,
             competeMode: false,
-            customChartServer: "",
             fullScreenJudge: false,
             stopWhenNoLife: false,
             useSeparateOffscreenCanvas: false,

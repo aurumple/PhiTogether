@@ -1,4 +1,21 @@
-import { PZUserTokenInfo, PZUserBasicInfo, PZPlayConfig } from "@community/phizone/userInfo.type";
+// 自建服务端模式下的账号信息（替代原 PhiZone PZUser* 类型）。
+// 字段与 global.js applyServerUser 填充的对象保持一致。
+export interface PTUserBasicInfo {
+    userName: string;
+    id: string | number;
+    role: string;
+    experience: number;
+    rks: number;
+    avatar: string | null;
+    dateLastLoggedIn: number;
+    isPTDeveloper: boolean;
+}
+
+export interface GameConfigAccount {
+    tokenInfo: unknown;
+    userBasicInfo: PTUserBasicInfo | null;
+    defaultConfig: unknown;
+}
 
 export interface GameConfig {
     account: GameConfigAccount;
@@ -39,28 +56,17 @@ export interface GameConfig {
     customResourceLink: string;
     autoplay: boolean;
     competeMode: boolean;
-    customChartServer: string;
     fullScreenJudge: boolean;
     stopWhenNoLife: boolean;
     useSeparateOffscreenCanvas: boolean;
     reviewWhenResume: boolean;
 }
 
-export interface GameConfigAccount {
-    tokenInfo: PZUserTokenInfo | null;
-    userBasicInfo: PZUserBasicInfo | null;
-    defaultConfigID: string | null;
-    defaultConfig: PZPlayConfig | null;
-    pzBestRecords: Object | null;
-}
-
 export const defaultGameConfig = {
     account: {
         tokenInfo: null,
         userBasicInfo: null,
-        defaultConfigID: null,
         defaultConfig: null,
-        pzBestRecords: {},
     },
     ptBestRecords: {},
     showPoint: false,
@@ -99,7 +105,6 @@ export const defaultGameConfig = {
     customResourceLink: "",
     autoplay: false,
     competeMode: false,
-    customChartServer: "ptc.realtvop.top",
     fullScreenJudge: false,
     stopWhenNoLife: false,
     useSeparateOffscreenCanvas: false,
