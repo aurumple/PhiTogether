@@ -8,6 +8,8 @@ interface PezInfo {
     composer: string;
     charter: string;
     illustrator: string;
+    /** info.txt 的 Song: 字段（音频文件名），可作为歌曲的稳定标识 */
+    song?: string;
 }
 
 interface FileEntry {
@@ -48,6 +50,7 @@ function parsePezInfo(text: string): PezInfo {
         composer: map["composer"] || "Unknown",
         charter: map["charter"] || "Unknown",
         illustrator: map["illustrator"] || map["composer"] || "Unknown",
+        song: map["song"],
     };
 }
 
@@ -64,14 +67,15 @@ function parseLevel(levelStr: string): { level: string; difficulty: number } {
  * 从服务端下载一个 .pez/.zip 谱面包并导入 PhiTogether IndexedDB。
  * 通过 response body reader 上报字节进度（0-90），解包入库阶段占 90-100。
  * 支持AbortSignal：中止时抛出 AbortError，由调用方决定重新排队。
- * 成功时返回导入生成的本地歌曲 id（供已下载索引建立 文件名↔本地歌曲 关联），
+ * 成功时返回导入生成的本地歌曲 id 与谱面 id（供已下载索引建立
+ * 文件名↔本地记录 关联；同曲多难度共用歌曲 id），
  * 文件无效（解包失败）返回 null，保存失败返回 null。
  */
 export async function importPezChartFromServer(
     filePath: string,
     fileName: string,
     opts: ImportProgressOptions = {}
-): Promise<string | null> {
+): Promise<{ songId: string; chartId: string } | null> {
     const { signal, onProgress, onImporting } = opts;
     const resp = await authFetch(filePath, { signal });
     if (!resp.ok) throw new Error(`Chart download failed (${resp.status})`);
@@ -106,9 +110,9 @@ export async function importPezChartFromServer(
     const extracted = await extractPez(buffer, fileName);
     if (!extracted) return null;
 
-    const songId = await saveToIndexedDB(extracted);
+    const imported = await saveToIndexedDB(extracted);
     onProgress?.(100);
-    return songId;
+    return imported;
 }
 
 async function extractPez(buffer: ArrayBuffer, fileName: string): Promise<ExtractedChart | null> {
@@ -204,23 +208,35 @@ function parseYamlInfo(text: string): PezInfo {
     };
 }
 
-async function saveToIndexedDB(extracted: ExtractedChart): Promise<string | null> {
+async function saveToIndexedDB(
+    extracted: ExtractedChart
+): Promise<{ songId: string; chartId: string } | null> {
     const { chartBuffer, songBuffer, illustrationBuffer, info } = extracted;
     const { level, difficulty } = parseLevel(info.level);
 
     const chartText = new TextDecoder("utf-8").decode(chartBuffer);
-    let md5hash: string;
+    let md5mod: { default: (s: string) => string } | null = null;
     try {
-        const md5mod = await import("md5");
-        md5hash = md5mod.default(chartText);
+        md5mod = await import("md5");
     } catch {
-        md5hash = "";
+        md5mod = null;
     }
+    const hash = (s: string) => (md5mod ? md5mod.default(s) : "");
+    const chartId = hash(chartText) || info.name;
 
-    const chartId = md5hash || info.name;
+    // 同曲多难度共用一条歌曲记录（音频/曲绘只存一份）：优先取 info.txt 的
+    // Song: 字段（资源库曲目 ID），其次 曲名+曲师（与资源库的身份定义一致）。
+    // 两者都不可靠时退回谱面哈希，每难度各存一份（与旧行为一致）。
+    const GENERIC_NAMES = new Set(["music", "song", "audio", "track", "bgm", "file", "output"]);
+    const songField = (info.song || "").replace(/\.[^.]+$/, "").trim();
+    let songId = chartId;
+    if (songField && !GENERIC_NAMES.has(songField.toLowerCase()))
+        songId = hash("song:" + songField) || chartId;
+    else if (info.name && info.composer && info.name !== "Unknown" && info.composer !== "Unknown")
+        songId = hash("meta:" + info.name + "\u0000" + info.composer) || chartId;
 
     const songMeta = {
-        id: chartId,
+        id: songId,
         name: info.name,
         composer: info.composer,
         illustrator: info.illustrator,
@@ -234,18 +250,22 @@ async function saveToIndexedDB(extracted: ExtractedChart): Promise<string | null
         difficulty: difficulty,
         chart: "",
         charter: info.charter,
-        song: chartId,
+        song: songId,
     };
 
     try {
-        const cachedSong = await ptdb.chart.song.download(
-            songMeta,
-            new Blob([songBuffer]),
-            illustrationBuffer.byteLength > 0
-                ? new Blob([illustrationBuffer])
-                : undefined
-        );
-        await ptdb.chart.song.save(cachedSong);
+        // 同曲记录已存在时跳过音频/曲绘写入：内容相同，重复写只是浪费
+        const exists = await ptdb.chart.song.has(String(songId)).catch(() => false);
+        if (!exists) {
+            const cachedSong = await ptdb.chart.song.download(
+                songMeta,
+                new Blob([songBuffer]),
+                illustrationBuffer.byteLength > 0
+                    ? new Blob([illustrationBuffer])
+                    : new Blob([])
+            );
+            await ptdb.chart.song.save(cachedSong);
+        }
     } catch (e) {
         console.warn("Failed to save song:", info.name, e);
         return null;
@@ -262,5 +282,5 @@ async function saveToIndexedDB(extracted: ExtractedChart): Promise<string | null
         return null;
     }
 
-    return chartId;
+    return { songId: String(songId), chartId: String(chartId) };
 }

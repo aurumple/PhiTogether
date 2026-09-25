@@ -23,15 +23,17 @@ export interface QueueItem extends ChartFileMeta {
     error?: string;
 }
 
-// 已导入索引：{ [服务端文件名]: { size, songId } }，存 ptdb userData。
+// 已导入索引：{ [服务端文件名]: { size, songId, chartId } }，存 ptdb userData。
 // - size：导入时的文件字节数，用于「服务端文件有更新」提示（大小变化）；
-// - songId：导入生成的本地歌曲 id，用于「更新=删旧导新」「删除本地=清标记」联动。
+// - songId：导入生成的本地歌曲 id（同曲多难度共用一个），用于歌曲级联动；
+// - chartId：导入生成的本地谱面 id，用于按难度单独更新/删除/清标记。
 // 旧版本记录是 { [文件名]: 字节数 }（无 songId），按 typeof 兼容读取。
 const IMPORTED_ID = "serverChartsImported";
 
 export interface ImportedEntry {
     size: number;
     songId?: string;
+    chartId?: string;
 }
 
 /** 旧版数字记录与新版对象记录统一为 ImportedEntry（无 songId 的为未关联旧数据） */
@@ -83,13 +85,32 @@ class ChartDownloadQueue {
         await ptdb.gameConfig.save(idx, IMPORTED_ID);
     }
 
-    private async markImported(item: QueueItem, songId: string | null) {
+    private async markImported(
+        item: QueueItem,
+        imported: { songId: string; chartId: string } | null
+    ) {
         try {
             const idx = await this.getImportedIndex();
-            idx[item.name] = { size: item.size, ...(songId ? { songId } : {}) };
+            idx[item.name] = {
+                size: item.size,
+                ...(imported ? { songId: imported.songId, chartId: imported.chartId } : {}),
+            };
             await this.saveImportedIndex(idx);
         } catch {
             /* 标记失败不影响已导入数据 */
+        }
+    }
+
+    /** 删除单个难度的本地记录时清掉对应文件的「已下载」标记。 */
+    async unlinkFile(name: string) {
+        try {
+            const idx = await this.getImportedIndex();
+            if (name in idx) {
+                delete idx[name];
+                await this.saveImportedIndex(idx);
+            }
+        } catch {
+            /* 清理失败只影响标记展示，不影响删除本身 */
         }
     }
 
@@ -187,7 +208,7 @@ class ChartDownloadQueue {
                 this.notify();
                 this.controller = new AbortController();
                 try {
-                    const songId = await importPezChartFromServer(next.path, next.name, {
+                    const imported = await importPezChartFromServer(next.path, next.name, {
                         signal: this.controller.signal,
                         onProgress: p => {
                             next.progress = p;
@@ -198,11 +219,11 @@ class ChartDownloadQueue {
                             this.notify();
                         },
                     });
-                    const ok = songId !== null;
+                    const ok = imported !== null;
                     next.status = ok ? "done" : "failed";
                     next.progress = ok ? 100 : next.progress;
                     if (!ok) next.error = i18n.global.t("chartManage.importInvalid");
-                    if (ok) await this.markImported(next, songId);
+                    if (ok) await this.markImported(next, imported);
                 } catch (e: any) {
                     if (this.paused || e?.name === "AbortError") {
                         // 暂停中断：重新排队等待恢复

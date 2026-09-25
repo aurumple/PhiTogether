@@ -185,7 +185,43 @@ function deleteCachedSong(id: string | number | null): Promise<boolean> | null {
     return deleteCachedSongOrChart(id, ObjectStores.Song);
 }
 function deleteCachedChart(id: string | number | null): Promise<boolean> | null {
-    return deleteCachedSongOrChart(id, ObjectStores.Chart);
+    // 同曲多难度共用歌曲记录（音频/曲绘只存一份）：删除谱面记录时若该歌曲
+    // 已无任何谱面，一并删除歌曲记录，避免残留音频占用空间。
+    if (id === null) return null;
+    id = parseCustomServerChartId(id);
+    return new Promise((res, rej) => {
+        openDB()
+            .then(db => {
+                const objStore = db
+                    .transaction([ObjectStores.Chart], "readwrite")
+                    .objectStore(ObjectStores.Chart);
+                const getReq = objStore.get(id as string | number);
+                getReq.onerror = e => rej(e);
+                getReq.onsuccess = e => {
+                    const record = getReq.result as CachedChart | undefined;
+                    objStore.delete(id as string | number);
+                    if (!record) return res(true);
+                    const left = objStore.openCursor();
+                    let remaining = 0;
+                    left.onerror = e => rej(e);
+                    left.onsuccess = () => {
+                        const cursor = left.result;
+                        if (cursor) {
+                            if (cursor.value && cursor.value.song === record.song) remaining++;
+                            cursor.continue();
+                        } else {
+                            if (!remaining) {
+                                db.transaction([ObjectStores.Song], "readwrite")
+                                    .objectStore(ObjectStores.Song)
+                                    .delete(record.song);
+                            }
+                            res(true);
+                        }
+                    };
+                };
+            })
+            .catch(e => rej(e));
+    });
 }
 
 function getCachedChart(id: string | number | null): Promise<CachedChart> | null {
