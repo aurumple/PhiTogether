@@ -99,7 +99,12 @@
             async singleGame() {
                 if (this.checkIfCantPlay()) return;
                 shared.game.ptmain.gameMode = "single";
-                this.to({ path: "/chartSelect", query: { offline: 1 } });
+                // 离线时只看本地缓存；在线时展示服务端曲库（下载/游玩统一入口）
+                this.to(
+                    navigator.onLine
+                        ? { path: "/chartSelect" }
+                        : { path: "/chartSelect", query: { offline: 1 } }
+                );
             },
             async multiGame() {
                 if (this.checkIfCantPlay()) return;
