@@ -103,28 +103,12 @@ export function installAssetResolution(api, map) {
 
   const originalOpen = XMLHttpRequest.prototype.open;
   XMLHttpRequest.prototype.open = function (method, url, ...rest) {
-    this.__onetapUrl = typeof url === 'string' ? url : '';
-    return originalOpen.call(this, method, url, ...rest);
-  };
-  const originalSend = XMLHttpRequest.prototype.send;
-  XMLHttpRequest.prototype.send = function (...args) {
-    const url = this.__onetapUrl || '';
-    const absolute = url.startsWith('http') ? '' : url;
-    const hit = absolute && serve(absolute);
-    if (!hit) return originalSend.apply(this, args);
-    hit.then(response => response.arrayBuffer()).then(buffer => {
-      Object.defineProperty(this, 'readyState', { value: 4, configurable: true });
-      Object.defineProperty(this, 'status', { value: 200, configurable: true });
-      Object.defineProperty(this, 'response', { value: buffer, configurable: true });
-      Object.defineProperty(this, 'responseText', { value: new TextDecoder().decode(buffer), configurable: true });
-      this.dispatchEvent(new Event('readystatechange'));
-      this.dispatchEvent(new Event('load'));
-      this.dispatchEvent(new Event('loadend'));
-    }).catch(() => {
-      this.dispatchEvent(new Event('error'));
-      this.dispatchEvent(new Event('loadend'));
-    });
-    return undefined;
+    // Chrome 89 rejects /src/... against a blob document in open(), before send()
+    // can intercept it. Resolve first, then let native XHR preserve responseType,
+    // progress, abort and error semantics (audio/image loaders depend on these).
+    const path = typeof url === 'string' ? url.split('?')[0] : '';
+    const resolved = toBlobUrl(api, path, map);
+    return originalOpen.call(this, method, resolved || url, ...rest);
   };
 
   window.fetch = (input, init) => {

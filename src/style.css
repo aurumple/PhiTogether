@@ -184,13 +184,7 @@ footer {
     src:
         local("Saira"),
         local("Saira-Normal"),
-        url("https://fonts.realtvop.top/Source Han Sans & Saira Hybrid-Regular.woff2") format("woff2"),
         url("/src/core/fonts/Source Han Sans & Saira Hybrid-Regular.woff2") format("woff2");
-}
-
-@font-face {
-    font-family: icomoon;
-    src: url("data:application/font-woff;base64,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");
 }
 
 ::selection {
@@ -291,41 +285,65 @@ input[type="radio"],
 } */
 
 .i-pause::after {
-    font: 1em icomoon;
-    content: "\e900";
+    content: "\2016";
 }
 
 .i-settings::after {
-    font: 1em icomoon;
-    content: "\e909";
+    content: "\22EE";
 }
 
 input[type="checkbox"] + label::before {
-    font: 0.9em icomoon;
-    content: "\e907";
+    content: "";
+    display: inline-block;
+    width: 0.7em;
+    height: 0.7em;
+    border: 0.12em solid #666;
+    border-radius: 2px;
     margin-left: 0.2em;
     margin-right: 0.2em;
+    vertical-align: middle;
 }
 
 input[type="checkbox"]:checked + label::before {
-    font: 0.9em icomoon;
-    content: "\e906";
+    content: "\2713";
+    display: inline-block;
+    width: 0.7em;
+    height: 0.7em;
+    border: 0.12em solid #0066ff;
+    border-radius: 2px;
+    background: #0066ff;
+    color: #fff;
+    font-size: 0.55em;
+    line-height: 0.7em;
+    text-align: center;
     margin-left: 0.2em;
     margin-right: 0.2em;
+    vertical-align: middle;
 }
 
 input[type="radio"] + label::before {
-    font: 0.9em icomoon;
-    content: "\e903";
+    content: "";
+    display: inline-block;
+    width: 0.65em;
+    height: 0.65em;
+    border: 0.12em solid #666;
+    border-radius: 50%;
     margin-left: 0.2em;
     margin-right: 0.2em;
+    vertical-align: middle;
 }
 
 input[type="radio"]:checked + label::before {
-    font: 0.9em icomoon;
-    content: "\e908";
+    content: "";
+    display: inline-block;
+    width: 0.65em;
+    height: 0.65em;
+    border: 0.12em solid #0066ff;
+    border-radius: 50%;
+    background: #0066ff;
     margin-left: 0.2em;
     margin-right: 0.2em;
+    vertical-align: middle;
 }
 
 select,

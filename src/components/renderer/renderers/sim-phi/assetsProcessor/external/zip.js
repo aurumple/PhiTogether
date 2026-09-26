@@ -6190,7 +6190,11 @@ function string(bfs) {
         }
     }
 }
-self.addEventListener("message", msg => {
-    if (typeof msg.data === "string" && msg.data === "reset") total = 0;
-    else readZip((total++, msg.data));
-});
+// The module build imports JSZip on the main thread. Only a Worker owns this
+// message protocol; window messages (including browser scheduling) are not ZIPs.
+if (typeof document === "undefined") {
+    self.addEventListener("message", msg => {
+        if (typeof msg.data === "string" && msg.data === "reset") total = 0;
+        else readZip((total++, msg.data));
+    });
+}
