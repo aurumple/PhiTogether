@@ -14,6 +14,7 @@ This is a **self-hostable edition** of [Team-PhiTogether/PhiTogether](https://gi
 - **A minimal server is included** (`server/`, Python + FastAPI): accounts (JWT), chart packages and the leaderboard — nothing else. See [server/README.md](server/README.md).
 - **Multiplayer code is kept but disabled** (the room server it needs is not part of this edition); the entry shows a maintenance notice.
 - **Low-performance-friendly default settings.** On first launch the game applies the recommended low-performance configuration: hide inactive (distant) notes, no background/UI blur, lower render resolution, no real-time delay calibration, and a 90 ms input offset. Everything stays adjustable in Settings.
+- **OneTap module build.** `pnpm build:onetap` creates the sandboxed OneTap module. Its package resolves bundled assets locally, and its Settings checkboxes use CSS controls that work in Chrome 89 WebViews.
 - No analytics, no external chart/community requests.
 
 ## Self-Hosting
