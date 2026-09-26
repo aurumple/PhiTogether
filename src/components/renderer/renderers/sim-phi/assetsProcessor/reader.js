@@ -1,6 +1,9 @@
 import { csv2array } from "@utils/js/common.js";
 import chartConverter from "../extends/chartConverter";
 import zipWorker from "@renderers/sim-phi/assetsProcessor/external/zip.js?url";
+// UMD 副作用挂 globalThis.JSZip：模块模式（CSP worker-src 'none'）在主线程解压用它。
+import "./external/zip.js";
+import { moduleMode } from "app-view";
 import md5 from "md5";
 class FileEmitter extends EventTarget {
     // files: [],
@@ -74,6 +77,54 @@ const stringify = async i => {
         }
     }
 };
+/** 模块模式的主线程解压器：与 external/zip.js 的 Worker 胶水同语义（zip 递归展开、
+ *  叶子文件逐条上抛 {name,path,buffer}），但按 zip 顺序串行解包——多 JSON 选择
+ *  “最后一个 .json”与服务端一致；文件之间让出主线程，不卡打歌前的加载。 */
+class InlineZipWorker extends EventTarget {
+    constructor() {
+        super();
+        this.total = 0;
+    }
+    postMessage(data) {
+        if (data === "reset") {
+            this.total = 0;
+            return;
+        }
+        this.total++;
+        void this.readZip(data);
+    }
+    terminate() {}
+    async readZip(data) {
+        try {
+            const zip = await globalThis.JSZip.loadAsync(data.buffer, {
+                checkCRC32: true,
+                decodeFileName: decodeName,
+            });
+            const arr = Object.values(zip.files).filter(i => !i.dir);
+            this.total += arr.length - 1;
+            for (const i of arr) {
+                const buffer = await i.async("arraybuffer");
+                await new Promise(resolve => setTimeout(resolve, 0));
+                void this.readZip({ name: i.name, path: `${data.path}/${i.name}`, buffer });
+            }
+        } catch {
+            this.dispatchEvent(new MessageEvent("message", { data: { data, total: this.total } }));
+        }
+    }
+}
+/** 文件名多编码：与 Worker 胶水的 string() 一致（utf-8 由 JSZip 默认处理）。 */
+function decodeName(bytes) {
+    const labels = ["gbk", "big5", "shift_jis"];
+    for (const label of labels) {
+        const decoder = new TextDecoder(label, { fatal: true });
+        try {
+            return decoder.decode(bytes);
+        } catch (e) {
+            if (label === labels[labels.length - 1]) throw e;
+        }
+    }
+}
+
 export class ZipReader extends EventTarget {
     /** @param {ReaderOptions} options */
     constructor({ handler = async data => data }) {
@@ -92,7 +143,7 @@ export class ZipReader extends EventTarget {
     read(result) {
         if (!this.worker) {
             this.dispatchEvent(new CustomEvent("loadstart"));
-            const worker = new Worker(zipWorker); //以后考虑indexedDB存储url
+            const worker = moduleMode ? new InlineZipWorker() : new Worker(zipWorker);
             worker.addEventListener("message", async msg => {
                 /** @type {{data:DataType,total:number}} */
                 const data = msg.data;

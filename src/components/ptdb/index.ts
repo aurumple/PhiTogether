@@ -1,7 +1,11 @@
-import { saveGameConfig, getGameConfig } from "./userData";
+import { saveGameConfig, getGameConfig, updateUserData, updateUserDataBatch } from "./userData";
 export const gameConfig = {
     get: getGameConfig,
     save: saveGameConfig,
+    // 原子 read-merge-write（CAS 合并）；updateBatch 把多行放进同一个原子批提交，
+    // 用于「本地成绩 + pendingPtUploads」必须同生共死的写入。
+    update: updateUserData,
+    updateBatch: updateUserDataBatch,
 };
 
 import { fetch as dbfetch } from "./fetch";

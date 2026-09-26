@@ -1,4 +1,7 @@
 import { createApp } from "vue/dist/vue.esm-bundler";
+// 根组件视图来源由构建决定：独立版=DOM 模板（运行时编译），模块版=构建期 render
+//（隔离容器 CSP 无 unsafe-eval）。别名 `app-view` 见 vite.config.js / onetap/vite.onetap.config.mjs。
+import viewOptions, { moduleMode } from "app-view";
 import * as VueRouter from "vue-router";
 import { msgHandler } from "@utils/js/msgHandler";
 import eruda from "eruda";
@@ -66,6 +69,12 @@ if (spec.isPhiTogetherApp) {
 
 const mainCtn = document.querySelector("div.main");
 const requestFullscreen = async forced => {
+    // 模块模式：铺满呈现由宿主（ui.fullscreen 能力）负责。容器沙箱没有 allow-fullscreen，
+    // 请求浏览器全屏只会抛错弹提示；直接视为已处理，loadingPage 的 untilFullscreen 不空等。
+    if (moduleMode) {
+        shared.game.requestedFullscreen = true;
+        return;
+    }
     if (
         !forced &&
         (spec.isPhiTogetherApp ||
@@ -107,16 +116,26 @@ shared.game.requestedFullscreen = false;
 shared.game.requestFullscreen = requestFullscreen;
 
 if (window.devicePixelRatio >= 3) document.documentElement.style.fontSize = "80%";
-if (location.hash.split("?")[1]) {
-    searchParams = new URLSearchParams(location.hash.slice(location.hash.indexOf("?") + 1));
+if (moduleMode) {
+    // 模块容器是 blob 文档：绝不操作宿主地址，路由走内存；深链参数在模块模式不适用。
+    // 呈现方式由宿主负责：这里直接视为已处理，loadingPage 的 untilFullscreen 不空等。
+    shared.game.requestedFullscreen = true;
+} else {
+    if (location.hash.split("?")[1]) {
+        searchParams = new URLSearchParams(location.hash.slice(location.hash.indexOf("?") + 1));
+    }
+    if (!location.hash || location.hash != "#/loading") location.hash = "#/loading";
 }
-
-if (!location.hash || location.hash != "#/loading") location.hash = "#/loading";
 scrollTo(0, 0);
 document.body.style.overflow = "hidden";
 
+// 模块模式用内存路由（容器地址是 blob URL，hash 路由会污染/失效）；独立版保持 hash 路由。
+const routerHistory = moduleMode ? VueRouter.createMemoryHistory() : VueRouter.createWebHashHistory();
+// 与独立版 location.hash="#/loading" 等价：必须从加载页启动——loadingPage 负责注册
+// shared.game.loaded 并在就绪后转场 startPage，跳过它 mounted() 里的 loaded() 调用会抛错。
+if (moduleMode) routerHistory.replace("/loading");
 const router = VueRouter.createRouter({
-    history: VueRouter.createWebHashHistory(),
+    history: routerHistory,
     routes,
 });
 
@@ -241,7 +260,7 @@ router.beforeEach((to, from) => {
             .forEach(i => (i.disabled = !(i.disabled = !i.disabled)));
 });
 const ptAppInstance = createApp({
-    template: document.getElementById("app").innerHTML,
+    ...viewOptions(),
     data() {
         return {
             _pzFollowAspectRatio: false,
@@ -450,7 +469,8 @@ const ptAppInstance = createApp({
                 else saved = JSON.parse(saved);
                 const ct = JSON.parse(lc);
                 saved[ct.id] = newVal;
-                localStorage.PTSavedOffsets = JSON.stringify(saved);
+                // 用 setItem 而不是属性赋值：模块模式的存储替身按 setItem 转发持久化
+                localStorage.setItem("PTSavedOffsets", JSON.stringify(saved));
             },
         },
         "gameConfig.resourcesType": {
@@ -633,17 +653,22 @@ const ptAppInstance = createApp({
                             const songInfo = JSON.parse(
                                 sessionStorage.getItem("chartDetailsData") || "{}"
                             );
-                            ptServer.queueRecord({
-                                chart_id: chartId,
-                                song_name: String(songInfo.name || ""),
-                                difficulty: String(chartData.level || ""),
-                                rating: Number(chartData.difficulty) || 0,
-                                score: Number(best.score) || 0,
-                                acc: (Number(best.acc) || 0) * 100,
-                                is_fc: !!best.isFc,
-                                max_acc: (Number(maxAcc) || 0) * 100,
-                                run_at: best.at || now,
-                            }).then(ok => {
+                            ptServer.queueRecord(
+                                {
+                                    chart_id: chartId,
+                                    song_name: String(songInfo.name || ""),
+                                    difficulty: String(chartData.level || ""),
+                                    rating: Number(chartData.difficulty) || 0,
+                                    score: Number(best.score) || 0,
+                                    acc: (Number(best.acc) || 0) * 100,
+                                    is_fc: !!best.isFc,
+                                    max_acc: (Number(maxAcc) || 0) * 100,
+                                    run_at: best.at || now,
+                                },
+                                // 本地成绩（gameConfig.ptBestRecords）随本次快照与
+                                // pendingPtUploads 同一原子批提交，防止互相覆盖
+                                this.gameConfig
+                            ).then(ok => {
                                 if (ok) ptServer.refreshLocalPlayerRks();
                                 this.updateResultRank(chartId, ok);
                             });
@@ -763,8 +788,8 @@ const ptAppInstance = createApp({
             //   document.body.classList.add("noUIBlur");
             // }
 
-            // 请求通知权限以便发送通知
-            if (!this.gameConfig.notifyFinished) {
+            // 请求通知权限以便发送通知（模块模式没有通知能力，也不弹这个询问）
+            if (!moduleMode && !this.gameConfig.notifyFinished) {
                 let onerr = e => {
                     if (window.spec.isPhiTogetherApp) return;
                     msgHandler.sendMessage(
@@ -785,25 +810,27 @@ const ptAppInstance = createApp({
                 } else onerr();
             }
 
-            // 版本更新
-            try {
-                const resp = await fetch(`/latestVersion.json?nocacahe=nocache`);
-                const result = await resp.json();
-                if (window.spec.thisVersion != result.ver) {
-                    if (
-                        await msgHandler.confirm(
-                            this.$t("update.newVersionNotify", [
-                                window.spec.thisVersion,
-                                result.ver,
-                            ])
-                        )
-                    ) {
-                        this.update();
-                        return;
+            // 版本更新（模块版本由宿主模块系统分发，容器内既无更新源也无跳转余地）
+            if (!moduleMode) {
+                try {
+                    const resp = await fetch(`/latestVersion.json?nocacahe=nocache`);
+                    const result = await resp.json();
+                    if (window.spec.thisVersion != result.ver) {
+                        if (
+                            await msgHandler.confirm(
+                                this.$t("update.newVersionNotify", [
+                                    window.spec.thisVersion,
+                                    result.ver,
+                                ])
+                            )
+                        ) {
+                            this.update();
+                            return;
+                        }
                     }
+                } catch (e) {
+                    msgHandler.sendMessage(this.$t("update.autoUpdateCheckFailed"), "error");
                 }
-            } catch (e) {
-                msgHandler.sendMessage(this.$t("update.autoUpdateCheckFailed"), "error");
             }
 
             document.addEventListener("fullscreenchange", () => {
@@ -1025,7 +1052,13 @@ const ptAppInstance = createApp({
             this.noAccountMode = true;
         },
         async clearLocalData(t) {
-            // 原谱面管理页的「高级清理」，现居设置页
+            // 原谱面管理页的「高级清理」，现居设置页。
+            // 模块模式先挡住：里面的 caches/indexedDB 在 opaque 来源不可用，location.reload()
+            // 更会把整个容器文档（blob URL 已回收）刷成空白，属于致命路径。
+            if (moduleMode) {
+                shared.game.msgHandler.sendMessage("模块模式暂不支持清理本机数据", "error");
+                return;
+            }
             const ok = await msgHandler.confirm(
                 this.$t("chartManage.confirmClear"),
                 this.$t("chartManage.dangerTitle"),
@@ -1058,6 +1091,8 @@ const ptAppInstance = createApp({
             }
         },
         update() {
+            // 模块模式版本由宿主分发：这里跳转/刷新只会把容器（blob 文档）弄丢。
+            if (moduleMode) return;
             caches.delete("PTv0-Main").then(() => {
                 const url = `/#${
                     searchParams ? `/updateAndPlayChart?${searchParams.toString()}` : "update"

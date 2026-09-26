@@ -3,7 +3,7 @@
     import { audio } from "@utils/js/aup";
     import ptdb from "@components/ptdb";
     import ploading from "@utils/js/ploading.js";
-    import { authFetch } from "@utils/serverApi";
+    import { authFetch, moduleApi } from "@utils/serverApi";
     import { chartDownloadQueue } from "@utils/chartDownloadQueue";
     import { ptServer } from "@utils/ptServer";
     import {
@@ -432,13 +432,51 @@
                 this.loading = true;
                 this.loadError = "";
                 try {
-                    const resp = await authFetch("/api/game/charts");
-                    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-                    const data = await resp.json();
-                    this.serverFiles = data.charts || [];
-                    this.chapters = data.chapters || [];
+                    const api = moduleApi();
+                    if (api && api.game) {
+                        // 模块模式走宿主网关 game.charts（每页 ≤200）：集成条目转独立版字段，
+                        // 下载地址统一为 /api/game/charts/<contentId>（chartDiscovery 按此取内容 ID）。
+                        const charts = [];
+                        let chapters = [];
+                        for (let page = 1; ; page++) {
+                            const data = await api.game.call("game.charts", { page, pageSize: 200 });
+                            const items = (data && data.items) || [];
+                            for (const item of items) {
+                                const contentId = String(item.contentId || "");
+                                charts.push({
+                                    // song_id 可含点号（如 光.姜米條）：必须用集成条目自带的 song_id，
+                                    // 按 contentId 切第一段会把同前缀的歌并成一组。
+                                    song_id: String(item.song_id || "") || String(item.chart_id || ""),
+                                    name: contentId,
+                                    path: "/api/game/charts/" + encodeURIComponent(contentId),
+                                    size: Number(item.contentBytes) || 0,
+                                    song_name: item.song_name,
+                                    level: item.difficulty_tier,
+                                    rating: item.rating,
+                                    charter: item.charter,
+                                    chapter: item.chapter,
+                                    chapter_order: item.chapter_order,
+                                    chart_id: item.chart_id,
+                                    composer: item.composer || "",
+                                    illustrator: item.illustrator || "",
+                                    cover: item.cover || null,
+                                });
+                            }
+                            if (!chapters.length && data && data.chapters) chapters = data.chapters;
+                            const total = data ? Number(data.total) || 0 : 0;
+                            if (!items.length || charts.length >= total || page >= 200) break;
+                        }
+                        this.serverFiles = charts;
+                        this.chapters = chapters;
+                    } else {
+                        const resp = await authFetch("/api/game/charts");
+                        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                        const data = await resp.json();
+                        this.serverFiles = data.charts || [];
+                        this.chapters = data.chapters || [];
+                    }
                 } catch (e) {
-                    this.loadError = e.message || this.$t("chartManage.loadFailed");
+                    this.loadError = (moduleApi() ? "[M] " : "[E] ") + (e && e.message || this.$t("chartManage.loadFailed"));
                     this.serverFiles = [];
                 } finally {
                     this.loading = false;
@@ -478,7 +516,15 @@
                 this.coverUrls[key] = "";
                 let url = "";
                 try {
-                    if (coverUrl) {
+                    const api = moduleApi();
+                    if (coverUrl && api && api.game && !coverUrl.includes("/")) {
+                        // 模块模式：曲绘是内容标识（<songID>.cover.png），走宿主下载通道取字节；
+                        // 取回即释放大对象引用，曲绘只留 object URL，不占模块存储配额。
+                        const got = await api.game.download(coverUrl);
+                        const bytes = await api.blobs.read(got.blobId);
+                        void api.blobs.release(got.blobId).catch(() => undefined);
+                        url = URL.createObjectURL(new Blob([bytes], { type: "image/png" }));
+                    } else if (coverUrl) {
                         const sep = coverUrl.includes("?") ? "&" : "?";
                         const resp = await authFetch(coverUrl + sep + "nocache=nocache");
                         if (resp.ok) url = URL.createObjectURL(await resp.blob());

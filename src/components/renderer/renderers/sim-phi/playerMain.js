@@ -243,7 +243,9 @@ export const simphiPlayer = {
     stage: {
         resize(forced) {
             const ranking = forced || simphiPlayer.fucktemp2;
-            simphiPlayer.app.stage.style.cssText = `;position:fixed;top:${forced ? 60 : 0}px;left:0;bottom:0;right:0;z-index:${ranking ? 0 : 1002};display:${location.hash.startsWith("#/playing") ? "block" : "none"};`;
+            // 走 $route 判断而不是 location.hash：模块模式是内存路由，容器地址永远不带 hash。
+            const onPlaying = shared.game.ptmain && shared.game.ptmain.$route.path === "/playing";
+            simphiPlayer.app.stage.style.cssText = `;position:fixed;top:${forced ? 60 : 0}px;left:0;bottom:0;right:0;z-index:${ranking ? 0 : 1002};display:${onPlaying ? "block" : "none"};`;
         },
         async doFullScreen() {
             try {
@@ -385,7 +387,8 @@ export const simphiPlayer = {
             if (r3 < 0) return;
             for (const j of i.direction) {
                 const ds = j[0] * ((9 * tick) / (8 * tick + 1)); //打击点距离
-                if (simphiPlayer.customResourceMeta["hitEvtDrawer"])
+                // 模块容器 CSP 无 unsafe-eval：模块模式回落默认特效，独立版保持原行为。
+                if (simphiPlayer.customResourceMeta["hitEvtDrawer"] && !window.__onetapPlatform)
                     eval(
                         `{ const ctxos = simphiPlayer.app.ctxos; ${simphiPlayer.customResourceMeta["hitEvtDrawer"]} }`
                     );

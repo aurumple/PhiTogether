@@ -72,7 +72,9 @@ def _parse_info_txt(text: str) -> dict:
             if head in LIB_LEVELS or head == "SP":
                 meta["level"] = head
             try:
-                meta["rating"] = float(value.rsplit("Lv", 1)[1].strip())
+                # "Lv.16" / "Lv.12.6" / "Lv16" 三种写法都取数字定数；rsplit 出来的
+                # ".16" 需要剥掉小数点，否则定数会缩水 100 倍（与客户端 parseLevel 对齐）
+                meta["rating"] = float(value.rsplit("Lv", 1)[1].strip().lstrip("."))
             except (IndexError, ValueError):
                 pass
     return meta
@@ -206,9 +208,8 @@ def _lib_chart_id(chart_file: Path) -> str:
     return chart_id
 
 
-@router.get("/charts")
-async def list_charts(user=Depends(get_current_user)):
-    """List every downloadable chart with metadata for the song browser.
+def collect_chart_entries() -> list[dict]:
+    """Merge every downloadable chart into one entry list (both run modes).
 
     Two sources are merged:
     - ``<data_dir>/charts/``: .pez/.zip packages dropped in manually, each
@@ -220,6 +221,9 @@ async def list_charts(user=Depends(get_current_user)):
       ``<songID>.<LEVEL>.pez`` entry (``source: "lib"``) that the download
       endpoint packs on demand. Song metadata (cover, ratings, charters) comes
       from the library's meta.json.
+
+    独立模式与集成模式（/int/v1/charts）共用这一份结果：chart_id、校验与打包规则
+    只能有一个实现，否则两端的排行榜会因为规则漂移而对不上。
     """
     suffixes = {".pez", ".zip"}
     charts: list[dict] = []
@@ -282,7 +286,13 @@ async def list_charts(user=Depends(get_current_user)):
                 "chapter": meta.get("chapter", ""),
                 "chapter_order": meta.get("chapter_order", 999),
             })
-    return {"charts": charts, "chapters": _load_chapter_index()}
+    return charts
+
+
+@router.get("/charts")
+async def list_charts(user=Depends(get_current_user)):
+    """List every downloadable chart with metadata for the song browser."""
+    return {"charts": collect_chart_entries(), "chapters": _load_chapter_index()}
 
 
 def _parse_lib_filename(filename: str) -> tuple[str, str] | None:
@@ -298,17 +308,21 @@ def _parse_lib_filename(filename: str) -> tuple[str, str] | None:
     return song_id, level.upper()
 
 
-def _pack_lib_pez(song_dir: Path, meta: dict, level: str) -> bytes | None:
-    """Assemble one .pez from the shared library (audio stored once per song)."""
+def _write_lib_pez(song_dir: Path, meta: dict, level: str, out) -> bool:
+    """Assemble one .pez from the shared library into ``out`` (audio stored once per song).
+
+    写入目标可以是 BytesIO（独立模式整包响应）或临时文件（集成模式分块流式），
+    打包规则只此一份。
+    """
     chart_meta = next((c for c in meta.get("charts", []) if str(c.get("level", "")).upper() == level), None)
     if not chart_meta:
-        return None
+        return False
     song_id = str(meta.get("id") or song_dir.name)
     chart_path = song_dir / str(chart_meta.get("file") or f"{level}.json")
     music_path = song_dir / "music.ogg"
     cover_path = song_dir / "illustration.png"
     if not chart_path.is_file() or not music_path.is_file():
-        return None
+        return False
 
     rating = chart_meta.get("rating") or 0
     try:
@@ -327,40 +341,72 @@ def _pack_lib_pez(song_dir: Path, meta: dict, level: str) -> bytes | None:
         f"Charter: {chart_meta.get('charter', '')}"
     )
 
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w") as zf:
+    with zipfile.ZipFile(out, "w") as zf:
         zf.writestr("info.txt", info_txt, compress_type=zipfile.ZIP_DEFLATED)
-        zf.writestr(f"{song_id}.json", chart_path.read_bytes(), compress_type=zipfile.ZIP_DEFLATED)
-        # audio/cover are already compressed formats; storing avoids re-deflating MBs
-        zf.writestr(f"{song_id}.ogg", music_path.read_bytes(), compress_type=zipfile.ZIP_STORED)
+        # 文件成员用 zf.write 流式写（8KB 块）：真实谱面 JSON 可达十几 MB，
+        # read_bytes 会把整包峰值堆进内存；audio/cover 已是压缩格式，STORED 免重压
+        zf.write(chart_path, arcname=f"{song_id}.json", compress_type=zipfile.ZIP_DEFLATED)
+        zf.write(music_path, arcname=f"{song_id}.ogg", compress_type=zipfile.ZIP_STORED)
         if cover_path.is_file():
-            zf.writestr(f"{song_id}.png", cover_path.read_bytes(), compress_type=zipfile.ZIP_STORED)
+            zf.write(cover_path, arcname=f"{song_id}.png", compress_type=zipfile.ZIP_STORED)
+    return True
+
+
+def _pack_lib_pez(song_dir: Path, meta: dict, level: str) -> bytes | None:
+    buf = io.BytesIO()
+    if not _write_lib_pez(song_dir, meta, level, buf):
+        return None
     return buf.getvalue()
+
+
+def resolve_chart_package(filename: str) -> tuple[str, object]:
+    """Map a validated content name to its source: manual file or virtual lib pez.
+
+    Returns ``("file", Path)`` / ``("lib", (song_dir, meta, level))`` /
+    ``("missing", None)``. 鉴权和响应形态由调用方决定：独立模式整包 FileResponse，
+    集成模式临时文件 + Range 流式。名字形状校验（路径穿越等）也留给调用方——
+    两边接受的字符集不同（集成模式按网关的 contentId 白名单）。
+    """
+    chart_path = get_charts_dir() / filename
+    if chart_path.is_file() and chart_path.suffix.lower() in {".pez", ".zip"}:
+        return "file", chart_path
+    # 模块曲绘内容 <songID>.cover.png：目录曲绘按需走内容通道（Range/摘要复用文件源），
+    # 独立模式不用它——独立模式有专门的 /api/game/covers/<song_id>。
+    if filename.endswith(".cover.png"):
+        song_id = filename[: -len(".cover.png")]
+        if song_id and Path(song_id).name == song_id:
+            cover = get_charts_lib_dir() / song_id / "illustration.png"
+            if cover.is_file():
+                return "file", cover
+        return "missing", None
+    parsed = _parse_lib_filename(filename)
+    if not parsed:
+        return "missing", None
+    song_id, level = parsed
+    song_dir = get_charts_lib_dir() / song_id
+    meta = _load_lib_meta(song_dir) if song_dir.is_dir() else None
+    if not meta:
+        return "missing", None
+    return "lib", (song_dir, meta, level)
 
 
 @router.get("/charts/{filename}")
 async def get_chart_file(filename: str, user=Depends(get_user_from_token_or_header)):
     if Path(filename).name != filename or Path(filename).suffix.lower() not in {".pez", ".zip"}:
         raise HTTPException(status_code=400, detail="Invalid chart filename")
-    chart_path = get_charts_dir() / filename
-    if chart_path.is_file():
-        return FileResponse(chart_path, media_type="application/octet-stream", filename=filename)
-
-    # Not a manual package: try the shared library's virtual <songID>.<LEVEL>.pez
-    parsed = _parse_lib_filename(filename)
-    if not parsed:
-        raise HTTPException(status_code=404, detail="Chart not found")
-    song_id, level = parsed
-    song_dir = get_charts_lib_dir() / song_id
-    meta = _load_lib_meta(song_dir) if song_dir.is_dir() else None
-    data = _pack_lib_pez(song_dir, meta, level) if meta else None
-    if data is None:
-        raise HTTPException(status_code=404, detail="Chart not found")
-    return Response(
-        data,
-        media_type="application/octet-stream",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
+    source, payload = resolve_chart_package(filename)
+    if source == "file":
+        return FileResponse(payload, media_type="application/octet-stream", filename=filename)
+    if source == "lib":
+        song_dir, meta, level = payload
+        data = _pack_lib_pez(song_dir, meta, level)
+        if data is not None:
+            return Response(
+                data,
+                media_type="application/octet-stream",
+                headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            )
+    raise HTTPException(status_code=404, detail="Chart not found")
 
 
 @router.get("/covers/{song_id}")
@@ -401,26 +447,32 @@ def _record_rank_key(score: int, acc: float, is_fc: bool):
     return (score, acc, 1 if is_fc else 0)
 
 
-@router.post("/pt/records")
-async def submit_pt_record(body: PTRecordRequest, user=Depends(get_current_user), db=Depends(get_db)):
-    """Upsert the caller's best run for a chart and maintain its rks.
+async def merge_pt_record(
+    db, user_id: int, *, chart_id: str, song_name: str, difficulty: str,
+    rating: float, score: int, acc: float, is_fc: bool,
+    max_acc: float | None, run_at: str | None,
+) -> dict:
+    """Merge one run into pt_best_records (shared by standalone and integration).
 
     score/acc/is_fc describe the best run (max of the (score, acc, is_fc) key).
     ``max_acc`` is tracked separately so rks keeps using the highest accuracy
     ever achieved even when that accuracy came from a different run.
+
+    返回 {"improved", "best_acc", "chart_rks", "record"}：record 是合并后库中行的
+    快照，因此同一成绩幂等重发时响应不变（离线补传允许重复提交）。
     """
-    best_acc = body.max_acc if body.max_acc is not None else body.acc
+    best_acc = max_acc if max_acc is not None else acc
     cur = await db.execute(
         "SELECT score, acc, is_fc, best_acc FROM pt_best_records WHERE user_id = ? AND chart_id = ?",
-        (user["id"], body.chart_id),
+        (user_id, chart_id),
     )
     old = await cur.fetchone()
-    improved = old is None or _record_rank_key(body.score, body.acc, body.is_fc) > _record_rank_key(
+    improved = old is None or _record_rank_key(score, acc, is_fc) > _record_rank_key(
         old["score"], old["acc"], bool(old["is_fc"])
     )
     if old is not None:
         best_acc = max(best_acc, old["best_acc"] or old["acc"])
-    chart_rks = _chart_rks(body.rating, best_acc)
+    chart_rks = _chart_rks(rating, best_acc)
     if improved:
         await db.execute(
             """INSERT INTO pt_best_records
@@ -432,9 +484,9 @@ async def submit_pt_record(body: PTRecordRequest, user=Depends(get_current_user)
                  score=excluded.score, acc=excluded.acc, is_fc=excluded.is_fc,
                  best_acc=excluded.best_acc, run_at=excluded.run_at,
                  chart_rks=excluded.chart_rks, updated_at=excluded.updated_at""",
-            (user["id"], body.chart_id, body.song_name, body.difficulty,
-             body.rating, body.score, body.acc, 1 if body.is_fc else 0,
-             best_acc, body.run_at, chart_rks),
+            (user_id, chart_id, song_name, difficulty,
+             rating, score, acc, 1 if is_fc else 0,
+             best_acc, run_at, chart_rks),
         )
         await db.commit()
     elif best_acc > (old["best_acc"] or old["acc"]):
@@ -442,17 +494,45 @@ async def submit_pt_record(body: PTRecordRequest, user=Depends(get_current_user)
         await db.execute(
             """UPDATE pt_best_records SET best_acc = ?, chart_rks = ?, updated_at = datetime('now')
                WHERE user_id = ? AND chart_id = ?""",
-            (best_acc, chart_rks, user["id"], body.chart_id),
+            (best_acc, chart_rks, user_id, chart_id),
         )
         await db.commit()
+    cur = await db.execute(
+        """SELECT chart_id, song_name, difficulty, rating, score, acc, is_fc,
+                  best_acc, run_at, chart_rks, updated_at
+           FROM pt_best_records WHERE user_id = ? AND chart_id = ?""",
+        (user_id, chart_id),
+    )
+    row = await cur.fetchone()
+    return {
+        "improved": improved,
+        "best_acc": best_acc,
+        "chart_rks": chart_rks,
+        "record": dict(row) if row else None,
+    }
+
+
+@router.post("/pt/records")
+async def submit_pt_record(body: PTRecordRequest, user=Depends(get_current_user), db=Depends(get_db)):
+    """Upsert the caller's best run for a chart and maintain its rks.
+
+    合并规则见 merge_pt_record（与集成模式共用）。响应保持原有的回显语义：
+    record 的展示字段取本次请求，best_acc/chart_rks 取合并结果。
+    """
+    result = await merge_pt_record(
+        db, user["id"],
+        chart_id=body.chart_id, song_name=body.song_name, difficulty=body.difficulty,
+        rating=body.rating, score=body.score, acc=body.acc, is_fc=body.is_fc,
+        max_acc=body.max_acc, run_at=body.run_at,
+    )
     return {
         "ok": True,
-        "improved": improved,
+        "improved": result["improved"],
         "record": {
             "chart_id": body.chart_id, "song_name": body.song_name, "difficulty": body.difficulty,
             "rating": body.rating, "score": body.score, "acc": body.acc,
-            "is_fc": body.is_fc, "best_acc": best_acc, "run_at": body.run_at,
-            "chart_rks": chart_rks,
+            "is_fc": body.is_fc, "best_acc": result["best_acc"], "run_at": body.run_at,
+            "chart_rks": result["chart_rks"],
         },
     }
 
@@ -508,6 +588,30 @@ async def pt_leaderboard(user=Depends(get_current_user), db=Depends(get_db)):
     }
 
 
+def rank_chart_rows(rows: list[dict]) -> list[dict]:
+    """Rank rows by the best-run key (score, acc, is_fc); ties share a rank.
+
+    Competition ranking (1, 2, 2, 4); the run date never breaks a tie.
+    """
+    rows.sort(key=lambda r: (r["score"], r["acc"], 1 if r["is_fc"] else 0), reverse=True)
+    prev_key: tuple | None = None
+    rank = 0
+    for i, row in enumerate(rows):
+        key = (row["score"], row["acc"], row["is_fc"])
+        if key != prev_key:
+            rank = i + 1
+            prev_key = key
+        row["rank"] = rank
+    return rows
+
+
+def select_top_and_me(ranked: list[dict], user_id: int) -> tuple[list[dict], dict | None]:
+    """Top-10 ranks (ties at the cut-off all shown) plus the caller's own row."""
+    me_row = next((r for r in ranked if r["user_id"] == user_id), None)
+    top = [r for r in ranked if r["rank"] <= 10]
+    return top, me_row
+
+
 @router.get("/pt/chart-leaderboard")
 async def chart_leaderboard(chart_id: str, user=Depends(get_current_user), db=Depends(get_db)):
     """Top-10 ranks of one chart plus the caller's own standing.
@@ -521,20 +625,9 @@ async def chart_leaderboard(chart_id: str, user=Depends(get_current_user), db=De
         (chart_id,),
     )
     rows = [dict(r) for r in await cur.fetchall()]
-    rows.sort(key=lambda r: (r["score"], r["acc"], 1 if r["is_fc"] else 0), reverse=True)
-    ranked: list[dict] = []
-    prev_key: tuple | None = None
-    rank = 0
-    for i, row in enumerate(rows):
-        key = (row["score"], row["acc"], row["is_fc"])
-        if key != prev_key:
-            rank = i + 1
-            prev_key = key
-        row["rank"] = rank
-        ranked.append(row)
+    ranked = rank_chart_rows(rows)
 
-    me_row = next((r for r in ranked if r["user_id"] == user["id"]), None)
-    top = [r for r in ranked if r["rank"] <= 10]
+    top, me_row = select_top_and_me(ranked, user["id"])
 
     stats = await _user_rks_rows(db, only={r["user_id"] for r in top} | ({me_row["user_id"]} if me_row else set()))
     names: dict[int, str] = {}
@@ -566,20 +659,25 @@ async def chart_leaderboard(chart_id: str, user=Depends(get_current_user), db=De
     }
 
 
-@router.get("/pt/me")
-async def my_pt_records(user=Depends(get_current_user), db=Depends(get_db)):
-    """The caller's best-30 detail rows plus overall rks."""
+async def load_me_records(db, user_id: int) -> dict:
+    """The user's best-30 detail rows plus overall rks (same shape in both modes)."""
     cur = await db.execute(
         """SELECT chart_id, song_name, difficulty, rating, score, acc, is_fc,
                   best_acc, run_at, chart_rks, updated_at
            FROM pt_best_records WHERE user_id = ?
            ORDER BY chart_rks DESC LIMIT ?""",
-        (user["id"], PT_BEST_LIMIT),
+        (user_id, PT_BEST_LIMIT),
     )
     records = [dict(row) for row in await cur.fetchall()]
-    stats = await _user_rks_rows(db, user["id"])
+    stats = await _user_rks_rows(db, user_id)
     return {
         "records": records,
-        "rks": round(stats[user["id"]]["rks"], 4) if user["id"] in stats else 0.0,
+        "rks": round(stats[user_id]["rks"], 4) if user_id in stats else 0.0,
         "limit": PT_BEST_LIMIT,
     }
+
+
+@router.get("/pt/me")
+async def my_pt_records(user=Depends(get_current_user), db=Depends(get_db)):
+    """The caller's best-30 detail rows plus overall rks."""
+    return await load_me_records(db, user["id"])

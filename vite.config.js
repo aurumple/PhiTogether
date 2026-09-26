@@ -12,6 +12,9 @@ export default defineConfig({
             "@components": path.resolve(__dirname, "src/components"),
             "@locales": path.resolve(__dirname, "src/locales"),
             "@renderers": path.resolve(__dirname, "src/components/renderer/renderers"),
+            // 根组件视图来源：独立版用 DOM 模板；模块版构建（onetap/vite.onetap.config.mjs）会
+            // 把它指到构建期 render 产物（隔离容器 CSP 无 unsafe-eval）。
+            "app-view": path.resolve(__dirname, "src/appView.standalone.js"),
         },
     },
     build: {

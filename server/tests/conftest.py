@@ -29,11 +29,13 @@ def isolated_data_dir(tmp_path, monkeypatch):
 @pytest_asyncio.fixture
 async def client():
     from database import init_db
-    from main import app
+    from main import create_app
 
     await init_db()
+    # 每个测试按当前环境重新装配 app：集成/独立两种模式各自显式选择，
+    # 不复用 import 时的模块级实例（避免测试间模式串扰）。
     async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
+        transport=ASGITransport(app=create_app()), base_url="http://test"
     ) as ac:
         yield ac
 

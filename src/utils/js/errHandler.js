@@ -3,6 +3,7 @@ import { msgHandler } from "@utils/js/msgHandler";
 import { getConstructorName } from "@utils/js/common";
 import { Utils } from "@utils/js/utils";
 import ploading from "@utils/js/ploading.js";
+import { moduleMode } from "app-view";
 
 const errsToReport = [];
 
@@ -41,7 +42,10 @@ const sysError = (e, error, message) => {
                 : "0"
         );
 
-        if (navigator.onLine)
+        // 模块模式不外发：局域网产品不连公网（容器 CSP 也只放行同源），错误只做本机提示。
+        if (moduleMode) {
+            // 丢弃上报载荷；errsToReport 保持为空，“online” 重发循环自然无事可做。
+        } else if (navigator.onLine)
             fetch(`https://api.phitogether.realtvop.top/errReport`, {
                 method: "POST",
                 body: formData,
@@ -73,5 +77,6 @@ window.addEventListener("online", () => {
 });
 
 window.addEventListener("load", event => {
-    fetch(`https://api.phitogether.realtvop.top/t/o`).catch(e => e);
+    // 在线人数探测只在独立版发；模块模式不连公网。
+    if (!moduleMode) fetch(`https://api.phitogether.realtvop.top/t/o`).catch(e => e);
 });

@@ -1,3 +1,4 @@
+import { h } from "vue";
 import ChartSelectPageComponent from "../pages/chartselect.vue";
 import StartPageComponent from "../pages/startpage.vue";
 import PlayingPageComponent from "../pages/playing.vue";
@@ -12,7 +13,8 @@ import LoadingPageComponent from "../pages/loadingPage.vue";
 import PtLeaderboardComponent from "../pages/ptLeaderboard.vue";
 import multiIndexPageComponent from "../pages/multiIndex.vue";
 
-const EmptyPageComponent = { name: "Empty", template: "<span></span>" };
+// render 函数而不是 template 字符串：模块版 CSP 无 unsafe-eval，不能运行时编译模板。
+const EmptyPageComponent = { name: "Empty", render: () => h("span") };
 
 const routes = [
     { path: "/", redirect: "/startPage" },

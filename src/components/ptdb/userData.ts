@@ -1,4 +1,4 @@
-import openDB from "./openDB";
+import { getBackend } from "./backend";
 import { GameConfig, defaultGameConfig } from "@utils/types/GameConfig";
 
 /**
@@ -7,21 +7,9 @@ import { GameConfig, defaultGameConfig } from "@utils/types/GameConfig";
  */
 export function saveGameConfig(gameConfig: GameConfig | Object, id: string = "gameConfig") {
     if (!gameConfig) gameConfig = id === "gameConfig" ? defaultGameConfig : {};
-    return new Promise((res, rej) => {
-        gameConfig = JSON.parse(JSON.stringify(gameConfig));
-        openDB()
-            .then(db => {
-                const objStore = db.transaction(["userData"], "readwrite").objectStore("userData");
-                const getReq = objStore.get(id);
-                getReq.onsuccess = e => {
-                    if (getReq.result) objStore.put({ id, gameConfig });
-                    else objStore.add({ id, gameConfig });
-                    res(true);
-                };
-                getReq.onerror = e => rej(e);
-            })
-            .catch(e => rej(e));
-    });
+    // 只存可序列化的部分（模块模式下值要过桥面 JSON 通道，Blob/函数一律剥掉）
+    gameConfig = JSON.parse(JSON.stringify(gameConfig));
+    return getBackend().putUserData(id, gameConfig);
 }
 
 /**
@@ -31,23 +19,34 @@ export function getGameConfig(
     id: string = "gameConfig",
     defaultConfig?: Object
 ): Promise<Object | null> {
-    return new Promise((res, rej) => {
-        openDB()
-            .then(db => {
-                const objStore = db.transaction(["userData"]).objectStore("userData");
-                const getReq = objStore.get(id);
-                getReq.onsuccess = async e => {
-                    const result = getReq.result;
-                    if (result) res(result.gameConfig);
-                    else if (defaultConfig) {
-                        await saveGameConfig(defaultConfig, id);
-                        res(defaultConfig);
-                    } else rej(e);
-                };
-                getReq.onerror = e => rej(e);
-            })
-            .catch(e => rej(e));
-    });
+    return getBackend()
+        .getUserData(id)
+        .then(async result => {
+            if (result !== null && result !== undefined) return result;
+            if (defaultConfig) {
+                await saveGameConfig(defaultConfig, id);
+                return defaultConfig;
+            }
+            return Promise.reject(new Error("Not Found"));
+        });
+}
+
+/**
+ * 原子 read-merge-write 一行用户数据：mutator(当前值|null) → 新值（undefined 放弃写入）。
+ * 模块模式下 expectRev CAS，冲突即重读重合并；IDB 同一事务内完成。
+ */
+export function updateUserData(id: string, mutator: (cur: any) => any): Promise<any> {
+    return getBackend().updateUserData(id, mutator);
+}
+
+/**
+ * 多行用户数据在同一个原子批里提交（模块模式同一个 api.records.batch）。
+ * 用于「本地成绩 + pendingPtUploads」这类必须同生共死的写入，防止互相覆盖。
+ */
+export function updateUserDataBatch(
+    items: { id: string; mutator: (cur: any) => any }[]
+): Promise<any[]> {
+    return getBackend().updateUserDataBatch(items);
 }
 
 interface ParsedGameConfig {

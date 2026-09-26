@@ -1,6 +1,6 @@
 import { ZipReader } from "@renderers/sim-phi/assetsProcessor/reader";
 import ptdb from "@components/ptdb";
-import { authFetch } from "@utils/serverApi";
+import { authFetch, moduleApi, moduleContentIdOf } from "@utils/serverApi";
 
 interface PezInfo {
     name: string;
@@ -77,32 +77,56 @@ export async function importPezChartFromServer(
     opts: ImportProgressOptions = {}
 ): Promise<{ songId: string; chartId: string } | null> {
     const { signal, onProgress, onImporting } = opts;
-    const resp = await authFetch(filePath, { signal });
-    if (!resp.ok) throw new Error(`Chart download failed (${resp.status})`);
-
-    const total = Number(resp.headers.get("content-length")) || 0;
     let buffer: ArrayBuffer;
-    if (resp.body && typeof resp.body.getReader === "function" && total > 0) {
-        const reader = resp.body.getReader();
-        const chunks: Uint8Array[] = [];
-        let received = 0;
-        for (;;) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            chunks.push(value);
-            received += value.byteLength;
-            onProgress?.(Math.min(90, Math.floor((received / total) * 90)));
+    const api = moduleApi();
+    if (api && api.game) {
+        // 模块模式：按内容 ID 走宿主下载通道（续传/校验/取消都在宿主），字节整包取回再解出。
+        const contentId = moduleContentIdOf(filePath);
+        const cancel = () => { void Promise.resolve(api.game.cancel(contentId)).catch(() => undefined); };
+        if (signal) {
+            if (signal.aborted) throw new DOMException("The operation was aborted.", "AbortError");
+            signal.addEventListener("abort", cancel);
         }
-        const merged = new Uint8Array(received);
-        let offset = 0;
-        for (const chunk of chunks) {
-            merged.set(chunk, offset);
-            offset += chunk.byteLength;
+        try {
+            const got = await api.game.download(contentId, {
+                onProgress: (received: number, total: number) => {
+                    if (total > 0) onProgress?.(Math.min(90, Math.floor((received / total) * 90)));
+                },
+            });
+            if (signal && signal.aborted)
+                throw new DOMException("The operation was aborted.", "AbortError");
+            const bytes = await api.blobs.read(got.blobId);
+            buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+        } finally {
+            if (signal) signal.removeEventListener("abort", cancel);
         }
-        buffer = merged.buffer;
     } else {
-        buffer = await resp.arrayBuffer();
-        onProgress?.(80);
+        const resp = await authFetch(filePath, { signal });
+        if (!resp.ok) throw new Error(`Chart download failed (${resp.status})`);
+
+        const total = Number(resp.headers.get("content-length")) || 0;
+        if (resp.body && typeof resp.body.getReader === "function" && total > 0) {
+            const reader = resp.body.getReader();
+            const chunks: Uint8Array[] = [];
+            let received = 0;
+            for (;;) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                chunks.push(value);
+                received += value.byteLength;
+                onProgress?.(Math.min(90, Math.floor((received / total) * 90)));
+            }
+            const merged = new Uint8Array(received);
+            let offset = 0;
+            for (const chunk of chunks) {
+                merged.set(chunk, offset);
+                offset += chunk.byteLength;
+            }
+            buffer = merged.buffer;
+        } else {
+            buffer = await resp.arrayBuffer();
+            onProgress?.(80);
+        }
     }
     onProgress?.(90);
     onImporting?.();
@@ -130,7 +154,10 @@ async function extractPez(buffer: ArrayBuffer, fileName: string): Promise<Extrac
     });
 
     await new Promise<void>((resolve) => {
-        const timeout = setTimeout(() => resolve(), 5000);
+        // 主线程解压（CSP 无 worker）：打歌启动期主线程繁忙，大成员（曲绘/音频）单个
+        // 解压就可能超过 5 秒——看门狗只是防解压器卡死的保险丝，不能拿它截断正常解包，
+        // 否则会拿残缺成员误报「不是有效的 zip」。完成判定以 zip.total 计数为准。
+        const timeout = setTimeout(() => resolve(), 120000);
         zip.addEventListener("read", () => {
             if (zip.total > 0 && files.length >= zip.total) {
                 clearTimeout(timeout);
@@ -155,9 +182,9 @@ async function extractPez(buffer: ArrayBuffer, fileName: string): Promise<Extrac
             infoTxt = new TextDecoder("utf-8").decode(f.buffer);
         } else if (name === "info.yml") {
             infoYml = new TextDecoder("utf-8").decode(f.buffer);
-        } else if (name.endsWith(".json")) {
+        } else if (name.endsWith(".json") && f.buffer.byteLength > 0) {
             chartBuf = f.buffer;
-        } else if (name.endsWith(".ogg") || name.endsWith(".mp3") || name.endsWith(".wav")) {
+        } else if ((name.endsWith(".ogg") || name.endsWith(".mp3") || name.endsWith(".wav")) && f.buffer.byteLength > 0) {
             songBuf = f.buffer;
         } else if (name.endsWith(".png") || name.endsWith(".jpg") || name.endsWith(".jpeg") || name.endsWith(".webp")) {
             illBuf = f.buffer;

@@ -3,6 +3,11 @@
 Run with ``python main.py`` (or ``uvicorn main:app --host 0.0.0.0 --port 8000``).
 The built frontend (``pnpm build`` → ``dist/``) is served from the same origin,
 so the client talks to ``/api/*`` with no CORS setup.
+
+启动时显式二选一（见 config.py 的环境变量）：
+- 独立模式（默认）：/api/* + SPA 托管，行为与历史版本一致；
+- OneTap 集成模式（PT_ONETAP_INTEGRATION=1）：只挂 /int/v1/* 与 /api/health，
+  由 routers/integration.create_integration_app 装配，两种模式路由绝不混用。
 """
 import logging
 from contextlib import asynccontextmanager
@@ -82,21 +87,34 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="PhiTogether Server", lifespan=lifespan)
-app.include_router(auth_router)
-app.include_router(game_router)
+def create_app() -> FastAPI:
+    """按显式配置装配其中一种模式；两套路由不会同时存在。"""
+    if get_settings().onetap_integration:
+        from routers.integration import create_integration_app
+
+        return create_integration_app()
+
+    app = FastAPI(title="PhiTogether Server", lifespan=lifespan)
+    app.include_router(auth_router)
+    app.include_router(game_router)
+
+    @app.get("/api/health")
+    async def health():
+        return {"status": "ok"}
+
+    return app
 
 
-@app.get("/api/health")
-async def health():
-    return {"status": "ok"}
+app = create_app()
 
 
 def main() -> None:
     import uvicorn
 
     s = get_settings()
-    uvicorn.run(app, host=s.host, port=s.port)
+    # 集成模式只允许 loopback：网关契约就是本机回环，不看 PT_HOST 的脸色
+    host = "127.0.0.1" if s.onetap_integration else s.host
+    uvicorn.run(app, host=host, port=s.port)
 
 
 if __name__ == "__main__":

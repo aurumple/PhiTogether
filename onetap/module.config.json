@@ -1,0 +1,21 @@
+{
+  "moduleId": "phitogether",
+  "name": "PhiTogether",
+  "summary": "音游（内测）：单人游玩、谱库按曲下载、成绩与排行榜",
+  "displayVersion": "2.2.10-onetap.4",
+  "bridgeMajor": 2,
+  "storageSchema": 1,
+  "capabilities": [
+    "assets",
+    "storage",
+    "data.records",
+    "data.blobs",
+    "service.phitogether",
+    "files",
+    "ui.fullscreen"
+  ],
+  "icon": null,
+  "entry": "entry.js",
+  "styles": [],
+  "assets": []
+}

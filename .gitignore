@@ -48,3 +48,10 @@ __pycache__
 AGENTS.md
 docs/
 .zcode/
+
+# OneTap module build artifacts (packages, precompiled template, release staging)
+onetap/out/
+onetap/generated/
+onetap/release/pkg/
+onetap/release/*.tar.gz
+onetap/release/wheelhouse/

@@ -1,0 +1,15 @@
+[Unit]
+Description=PhiTogether OneTap integration service (loopback only)
+After=network.target
+
+[Service]
+User=maple
+Group=maple
+EnvironmentFile=/home/maple/phitogether/run.env
+WorkingDirectory=/home/maple/phitogether/current/server
+ExecStart=/home/maple/phitogether/current/venv/bin/python main.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

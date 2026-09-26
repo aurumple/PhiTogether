@@ -1,6 +1,5 @@
-import openDB from "./openDB";
+import { getBackend } from "./backend";
 import { SongMeta, ChartMeta } from "@utils/types/SongAndChartMeta";
-import ObjectStores from "./ObjectStores";
 import { renderPZApiFromCache } from "@components/cacheutils";
 import md5 from "md5";
 
@@ -76,6 +75,8 @@ async function getExistenceInCache(
     return [cache, await cache.match(url, { ignoreSearch: true, ignoreVary: true })];
 }
 async function deleteInCacheIfCached(arg: string | Response | URL) {
+    // Cache API 只在独立版可用（模块容器是 opaque 来源）；缓存清理是尽力而为。
+    if (!window.caches) return;
     getExistenceInCache(arg).then(e => {
         if (e[1]) {
             e[0].delete(e[1].url);
@@ -87,8 +88,7 @@ function deepClone(d: any): any {
 }
 
 async function haveSong(songId: string) {
-    const allCharts = await getAllChartsKeys(ObjectStores.Song);
-    return !!allCharts.includes(songId);
+    return await getBackend().hasSong(songId);
 }
 
 async function downloadSong(
@@ -165,139 +165,47 @@ async function downloadChart(
     };
 }
 
-function deleteCachedSongOrChart(
-    id: string | number | null,
-    name: string
-): Promise<boolean> | null {
-    if (id === null) return null;
-    return new Promise((res, rej) => {
-        openDB()
-            .then(db => {
-                const objStore = db.transaction([name], "readwrite").objectStore(name);
-                const getReq = objStore.delete(id);
-                getReq.onsuccess = e => res(true);
-                getReq.onerror = e => rej(e);
-            })
-            .catch(e => rej(e));
-    });
-}
 function deleteCachedSong(id: string | number | null): Promise<boolean> | null {
-    return deleteCachedSongOrChart(id, ObjectStores.Song);
+    if (id === null) return null;
+    return getBackend().deleteSong(id);
 }
 function deleteCachedChart(id: string | number | null): Promise<boolean> | null {
     // 同曲多难度共用歌曲记录（音频/曲绘只存一份）：删除谱面记录时若该歌曲
     // 已无任何谱面，一并删除歌曲记录，避免残留音频占用空间。
     if (id === null) return null;
     id = parseCustomServerChartId(id);
-    return new Promise((res, rej) => {
-        openDB()
-            .then(db => {
-                const objStore = db
-                    .transaction([ObjectStores.Chart], "readwrite")
-                    .objectStore(ObjectStores.Chart);
-                const getReq = objStore.get(id as string | number);
-                getReq.onerror = e => rej(e);
-                getReq.onsuccess = e => {
-                    const record = getReq.result as CachedChart | undefined;
-                    objStore.delete(id as string | number);
-                    if (!record) return res(true);
-                    const left = objStore.openCursor();
-                    let remaining = 0;
-                    left.onerror = e => rej(e);
-                    left.onsuccess = () => {
-                        const cursor = left.result;
-                        if (cursor) {
-                            if (cursor.value && cursor.value.song === record.song) remaining++;
-                            cursor.continue();
-                        } else {
-                            if (!remaining) {
-                                db.transaction([ObjectStores.Song], "readwrite")
-                                    .objectStore(ObjectStores.Song)
-                                    .delete(record.song);
-                            }
-                            res(true);
-                        }
-                    };
-                };
-            })
-            .catch(e => rej(e));
-    });
+    return getBackend().deleteChart(id);
 }
 
 function getCachedChart(id: string | number | null): Promise<CachedChart> | null {
-    return new Promise((res, rej) => {
-        if (id === null) return null;
-        id = parseCustomServerChartId(id);
-        openDB()
-            .then(db => {
-                const objStore = db
-                    .transaction([ObjectStores.Chart])
-                    .objectStore(ObjectStores.Chart);
-                const getReq = objStore.get(id as string | number);
-                getReq.onsuccess = e => {
-                    const result = getReq.result;
-                    if (result) res(result);
-                    else rej(e);
-                };
-                getReq.onerror = e => rej(e);
-            })
-            .catch(e => rej(e));
-    });
+    if (id === null) return null;
+    id = parseCustomServerChartId(id);
+    return getBackend()
+        .getChart(id)
+        .then(result => {
+            if (result) return result;
+            return Promise.reject(new Error("Chart Not Found"));
+        });
 }
 function getCachedSong(id: string | number | null): Promise<CachedSong> {
     return new Promise((res, rej) => {
         if (id === null) return rej(GetChartFilesError.SongIDNotFound);
         id = parseCustomServerChartId(id);
-        openDB()
-            .then(db => {
-                const objStore = db.transaction([ObjectStores.Song]).objectStore(ObjectStores.Song);
-                const getReq = objStore.get(id as string | number);
-                getReq.onsuccess = e => {
-                    const result = getReq.result;
-                    if (result) res(result);
-                    else rej(e);
-                };
-                getReq.onerror = e => rej(e);
+        getBackend()
+            .getSong(id)
+            .then(result => {
+                if (result) res(result);
+                else rej(new Error("Song Not Found"));
             })
             .catch(e => rej(e));
     });
 }
 
 function saveCachedSong(cachedSong: CachedSong): Promise<boolean | any> {
-    return new Promise((res, rej) => {
-        openDB()
-            .then(db => {
-                const objStore = db
-                    .transaction([ObjectStores.Song], "readwrite")
-                    .objectStore(ObjectStores.Song);
-                const getReq = objStore.get(cachedSong.id);
-                getReq.onsuccess = e => {
-                    if (getReq.result) objStore.put(cachedSong);
-                    else objStore.add(cachedSong);
-                    res(true);
-                };
-                getReq.onerror = e => rej(e);
-            })
-            .catch(e => rej(e));
-    });
+    return getBackend().putSong(cachedSong);
 }
 function saveCachedChart(cachedChart: CachedChart): Promise<boolean | any> {
-    return new Promise((res, rej) => {
-        openDB()
-            .then(db => {
-                const objStore = db
-                    .transaction([ObjectStores.Chart], "readwrite")
-                    .objectStore(ObjectStores.Chart);
-                const getReq = objStore.get(cachedChart.id);
-                getReq.onsuccess = e => {
-                    if (getReq.result) objStore.put(cachedChart);
-                    else objStore.add(cachedChart);
-                    res(true);
-                };
-                getReq.onerror = e => rej(e);
-            })
-            .catch(e => rej(e));
-    });
+    return getBackend().putChart(cachedChart);
 }
 
 function getSongsIllustrationAsB64(songid: string | number): Promise<string> {
@@ -436,41 +344,11 @@ function cachedSong2Meta(cachedSong: CachedSong): SongMeta {
     };
 }
 
-function getAllCharts(dbName: string = ObjectStores.Chart): Promise<CachedChart[]> {
-    return new Promise((res, rej) => {
-        openDB()
-            .then(db => {
-                const objStore = db.transaction([dbName]).objectStore(dbName);
-                objStore.getAll().onsuccess = e => {
-                    res((e.target as IDBRequest).result);
-                };
-            })
-            .catch(e => rej(e));
-    });
+function getAllCharts(): Promise<CachedChart[]> {
+    return getBackend().listCharts();
 }
-function getAllSongs(dbName: string = ObjectStores.Song): Promise<CachedSong[]> {
-    return new Promise((res, rej) => {
-        openDB()
-            .then(db => {
-                const objStore = db.transaction([dbName]).objectStore(dbName);
-                objStore.getAll().onsuccess = e => {
-                    res((e.target as IDBRequest).result);
-                };
-            })
-            .catch(e => rej(e));
-    });
-}
-function getAllChartsKeys(dbName: string = ObjectStores.Chart): Promise<string[]> {
-    return new Promise((res, rej) => {
-        openDB()
-            .then(db => {
-                const objStore = db.transaction([dbName]).objectStore(dbName);
-                objStore.getAllKeys().onsuccess = e => {
-                    res((e.target as IDBRequest).result);
-                };
-            })
-            .catch(e => rej(e));
-    });
+function getAllSongs(): Promise<CachedSong[]> {
+    return getBackend().listSongs();
 }
 async function renderPZApi(): Promise<PZApiResponse<SongMeta[]>> {
     const result: PZApiResponse<SongMeta[]> = {
@@ -481,20 +359,31 @@ async function renderPZApi(): Promise<PZApiResponse<SongMeta[]>> {
         results: [],
     };
 
-    const songsInCache = (await renderPZApiFromCache()) as unknown as SongMeta[];
+    // CacheStorage 里的历史缓存条目只在独立版存在；模块模式没有 caches。
+    const songsInCache =
+        getBackend().kind === "platform"
+            ? []
+            : ((await renderPZApiFromCache()) as unknown as SongMeta[]);
 
-    if (!window.indexedDB) {
+    if (!window.indexedDB && getBackend().kind !== "platform") {
         result.results = songsInCache;
         return result;
     }
 
     const allCharts: CachedChart[] = await getAllCharts();
+    const allSongs: CachedSong[] = await getAllSongs();
+    // 列表行只带元数据（模块模式下不会为列表读取任何大字节）：用歌曲表建索引，
+    // 替代旧实现里逐条 getCachedSong（查找键与 getCachedSong 一样先做 id 解析）。
+    const songById: Record<string, CachedSong> = {};
+    for (const song of allSongs) {
+        if (song) songById[String(parseCustomServerChartId(song.id))] = song;
+    }
 
     const songs: {} = {};
     for (const chart of allCharts) {
         if (!chart || !chart.song) continue;
         if (!songs[chart.song]) {
-            const cachedSong = await getCachedSong(chart.song).catch(e => null);
+            const cachedSong = songById[String(parseCustomServerChartId(chart.song))];
             if (!cachedSong) continue;
             songs[chart.song] = cachedSong;
             songs[chart.song].charts = [];
@@ -513,11 +402,15 @@ async function renderCacheList(): Promise<SongMeta[]> {
     const allCharts: CachedChart[] = await getAllCharts();
     const allSongs: CachedSong[] = await getAllSongs();
 
+    const songById: Record<string, CachedSong> = {};
+    for (const song of allSongs) {
+        if (song) songById[String(parseCustomServerChartId(song.id))] = song;
+    }
     const songs: {} = {};
     for (const chart of allCharts) {
         if (!chart) continue;
         if (!songs[chart.song]) {
-            const cachedSong = await getCachedSong(chart.song).catch(e => null);
+            const cachedSong = songById[String(parseCustomServerChartId(chart.song))];
             if (!cachedSong) {
                 songs[chart.song] = { charts: [] };
             } else {

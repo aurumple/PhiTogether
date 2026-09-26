@@ -692,5 +692,9 @@
         "colSong": "曲目",
         "colChartRks": "單曲RKS",
         "colScoreAcc": "分數 / 準度"
+    },
+    "storage": {
+        "quotaExceeded": "儲存空間不足：可刪除部分本地譜面或皮膚後重試，本次變更未儲存",
+        "contentInvalid": "儲存內容校驗失敗：本次變更未儲存，請重試"
     }
 }

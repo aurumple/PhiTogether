@@ -1,0 +1,6 @@
+OneTap module SDK snapshot (fixed vendored copy).
+source repo: D:/Code/FuckChangyan/OneTap-Next (branch main @ 0521792 + bridge-v2 work, 2026-09-26)
+fork baseline: PhiTogether main @ e762a70 (branch codex/onetap-next)
+files: index.js (runtime SDK), build.mjs (module package builder, releaseDigest algorithm)
+note: releaseId 摘要算法以本快照 build.mjs 的 releaseDigest 为准；与 OneTap 服务端
+server/modules.py release_digest 逐字节一致。更新本快照时记录新来源 commit 并两侧复核。

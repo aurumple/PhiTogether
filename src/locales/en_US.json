@@ -692,5 +692,9 @@
         "colSong": "Song",
         "colChartRks": "Chart RKS",
         "colScoreAcc": "Score / Accuracy"
+    },
+    "storage": {
+        "quotaExceeded": "Storage is full: remove some local charts or skins and try again. This change was not saved.",
+        "contentInvalid": "Stored content failed verification: this change was not saved, please retry."
     }
 }
