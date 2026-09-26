@@ -1,6 +1,6 @@
 {
  "version": 1,
- "generated_at": "2026-09-25",
+ "generated_at": "2026-09-26",
  "chapters": [
   {
    "id": "legacy",
@@ -86,7 +86,13 @@
    "id": "ch9",
    "name": "Chapter 9 穹顶孤舟",
    "order": 5,
-   "songs": []
+   "songs": [
+    "AboutTheUniverse.SOTUIMIssionary",
+    "Implexrough.Silentroommommy",
+    "Evanescent.LeaF",
+    "EntrancetotheChaos.打打だいずvssiromaru",
+    "ExoplanetaryMirage.かめりあ"
+   ]
   },
   {
    "id": "ss1",
@@ -550,7 +556,8 @@
     "DerSchneid.Ωμεγα",
     "星拂云锦featkoi.S9ryne",
     "NWAD.Knighthood",
-    "DevastatingHistory.NAMV"
+    "DevastatingHistory.NAMV",
+    "Cryogenic.CamelliaftPetraGurin"
    ]
   },
   {
@@ -565,5 +572,6 @@
    "order": 35,
    "songs": []
   }
- ]
+ ],
+ "note": "ch9/single members added from the 4.0.0 APK (GameInformation mainSongs order + single.txt) before the wiki datasets catch up."
 }
