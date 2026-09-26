@@ -43,3 +43,8 @@ server/.venv
 server/data
 __pycache__
 .pytest_cache
+
+# ZCode agent workspace files (kept local, never pushed)
+AGENTS.md
+docs/
+.zcode/
