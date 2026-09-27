@@ -82,7 +82,9 @@ export async function importPezChartFromServer(
     if (api && api.game) {
         // 模块模式：按内容 ID 走宿主下载通道（续传/校验/取消都在宿主），字节整包取回再解出。
         const contentId = moduleContentIdOf(filePath);
-        const cancel = () => { void Promise.resolve(api.game.cancel(contentId)).catch(() => undefined); };
+        const cancel = () => {
+            void Promise.resolve(api.game.cancel(contentId)).catch(() => undefined);
+        };
         if (signal) {
             if (signal.aborted) throw new DOMException("The operation was aborted.", "AbortError");
             signal.addEventListener("abort", cancel);
@@ -93,10 +95,17 @@ export async function importPezChartFromServer(
                     if (total > 0) onProgress?.(Math.min(90, Math.floor((received / total) * 90)));
                 },
             });
-            if (signal && signal.aborted)
-                throw new DOMException("The operation was aborted.", "AbortError");
-            const bytes = await api.blobs.read(got.blobId);
-            buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+            try {
+                if (signal && signal.aborted)
+                    throw new DOMException("The operation was aborted.", "AbortError");
+                const bytes = await api.blobs.read(got.blobId);
+                buffer = bytes.buffer.slice(
+                    bytes.byteOffset,
+                    bytes.byteOffset + bytes.byteLength
+                ) as ArrayBuffer;
+            } finally {
+                await api.blobs.release(got.blobId).catch(() => undefined);
+            }
         } finally {
             if (signal) signal.removeEventListener("abort", cancel);
         }
@@ -140,24 +149,23 @@ export async function importPezChartFromServer(
 }
 
 async function extractPez(buffer: ArrayBuffer, fileName: string): Promise<ExtractedChart | null> {
-    const isZip = buffer.byteLength > 4 &&
-        new DataView(buffer).getUint32(0, false) === 0x504b0304;
+    const isZip = buffer.byteLength > 4 && new DataView(buffer).getUint32(0, false) === 0x504b0304;
     if (!isZip) return null;
 
     const files: FileEntry[] = [];
 
     const zip = new ZipReader({
         handler: (data: { name: string; path: string; buffer: ArrayBuffer }) => {
-            files.push({ name: data.name, path: data.path, buffer: data.buffer.slice(0) });
+            files.push({ name: data.name, path: data.path, buffer: data.buffer });
             return { type: "skip", name: data.name, data: null };
         },
     });
 
-    await new Promise<void>((resolve) => {
+    await new Promise<void>((resolve, reject) => {
         // 主线程解压（CSP 无 worker）：打歌启动期主线程繁忙，大成员（曲绘/音频）单个
         // 解压就可能超过 5 秒——看门狗只是防解压器卡死的保险丝，不能拿它截断正常解包，
         // 否则会拿残缺成员误报「不是有效的 zip」。完成判定以 zip.total 计数为准。
-        const timeout = setTimeout(() => resolve(), 120000);
+        const timeout = setTimeout(() => reject(new Error("Chart import timed out")), 120000);
         zip.addEventListener("read", () => {
             if (zip.total > 0 && files.length >= zip.total) {
                 clearTimeout(timeout);
@@ -166,7 +174,7 @@ async function extractPez(buffer: ArrayBuffer, fileName: string): Promise<Extrac
         });
         zip.addEventListener("loadstart", () => {});
         zip.read({ name: fileName, buffer, path: fileName });
-    });
+    }).finally(() => zip.terminate?.());
 
     if (files.length === 0) return null;
 
@@ -184,9 +192,17 @@ async function extractPez(buffer: ArrayBuffer, fileName: string): Promise<Extrac
             infoYml = new TextDecoder("utf-8").decode(f.buffer);
         } else if (name.endsWith(".json") && f.buffer.byteLength > 0) {
             chartBuf = f.buffer;
-        } else if ((name.endsWith(".ogg") || name.endsWith(".mp3") || name.endsWith(".wav")) && f.buffer.byteLength > 0) {
+        } else if (
+            (name.endsWith(".ogg") || name.endsWith(".mp3") || name.endsWith(".wav")) &&
+            f.buffer.byteLength > 0
+        ) {
             songBuf = f.buffer;
-        } else if (name.endsWith(".png") || name.endsWith(".jpg") || name.endsWith(".jpeg") || name.endsWith(".webp")) {
+        } else if (
+            name.endsWith(".png") ||
+            name.endsWith(".jpg") ||
+            name.endsWith(".jpeg") ||
+            name.endsWith(".webp")
+        ) {
             illBuf = f.buffer;
         }
     }
@@ -212,7 +228,7 @@ async function extractPez(buffer: ArrayBuffer, fileName: string): Promise<Extrac
     return {
         chartBuffer: chartBuf,
         songBuffer: songBuf,
-        illustrationBuffer: illBuf || new Uint8Array(0).buffer as ArrayBuffer,
+        illustrationBuffer: illBuf || (new Uint8Array(0).buffer as ArrayBuffer),
         info,
     };
 }
@@ -287,9 +303,7 @@ async function saveToIndexedDB(
             const cachedSong = await ptdb.chart.song.download(
                 songMeta,
                 new Blob([songBuffer]),
-                illustrationBuffer.byteLength > 0
-                    ? new Blob([illustrationBuffer])
-                    : new Blob([])
+                illustrationBuffer.byteLength > 0 ? new Blob([illustrationBuffer]) : new Blob([])
             );
             await ptdb.chart.song.save(cachedSong);
         }
@@ -299,10 +313,7 @@ async function saveToIndexedDB(
     }
 
     try {
-        const cachedChart = await ptdb.chart.chart.download(
-            chartMeta,
-            new Blob([chartBuffer])
-        );
+        const cachedChart = await ptdb.chart.chart.download(chartMeta, new Blob([chartBuffer]));
         await ptdb.chart.chart.save(cachedChart);
     } catch (e) {
         console.warn("Failed to save chart:", info.name, e);

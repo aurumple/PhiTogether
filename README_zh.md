@@ -99,3 +99,5 @@ python main.py           # 同时提供 API 与构建好的前端，http://127.0
 OneTap 个人卡片保留「本地排行榜」，隐藏登录、切换账号、退出登录和重试登录；独立版保留账号操作。
 
 专项检查：`node script/check-library-cache.mjs`、`node script/check-offline-records.mjs`。
+
+谱面导入还减少了一次完整文件缓冲区复制，并释放 OneTap 临时下载对象和解包线程。解包超时会明确失败，不再导入不完整内容；暂不扩大下载并发或更改谱面包协议。

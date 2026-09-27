@@ -69,3 +69,5 @@ Keep the game page open to play downloaded charts without the server. Valid runs
 In OneTap, the player card retains **Local leaderboard** but hides login/switch/logout controls because the host owns the identity. Standalone account controls remain available.
 
 Targeted client checks: `node script/check-library-cache.mjs` and `node script/check-offline-records.mjs`.
+
+Chart import also avoids an unnecessary full-buffer copy and releases temporary OneTap download blobs and unzip workers. A timed-out archive is rejected instead of importing partial contents. Download concurrency and package formats are unchanged.
