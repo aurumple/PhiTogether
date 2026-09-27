@@ -137,7 +137,16 @@ function authHeaders(options: RequestInit = {}, token?: string | null): RequestI
 }
 
 async function request(path: string, options: RequestInit = {}, token?: string | null) {
-    return fetch(path, authHeaders(options, token));
+    const controller = options.signal ? null : new AbortController();
+    const timer = controller ? setTimeout(() => controller.abort(), 10000) : null;
+    try {
+        return await fetch(
+            path,
+            authHeaders({ ...options, signal: options.signal || controller!.signal }, token)
+        );
+    } finally {
+        if (timer !== null) clearTimeout(timer);
+    }
 }
 
 function describeError(detail: unknown): string {
@@ -167,6 +176,7 @@ async function errorFromResponse(resp: Response): Promise<Error> {
 async function refreshTokens(): Promise<boolean> {
     if (!session?.refresh_token) return false;
     if (refreshPromise) return refreshPromise;
+    const originalSession = session;
     refreshPromise = (async () => {
         try {
             const resp = await request(
@@ -178,11 +188,14 @@ async function refreshTokens(): Promise<boolean> {
                 },
                 null
             );
+            if (session !== originalSession) return false;
             if (!resp.ok) {
-                logout();
+                // Server outages must not destroy an otherwise valid offline identity.
+                if (resp.status === 401 || resp.status === 403) logout();
                 return false;
             }
             const data = await resp.json();
+            if (session !== originalSession) return false;
             session = {
                 access_token: data.access_token,
                 refresh_token: data.refresh_token,
@@ -204,9 +217,12 @@ async function refreshTokens(): Promise<boolean> {
  * refresh and a retry before giving up.
  */
 export async function authFetch(path: string, options: RequestInit = {}): Promise<Response> {
+    const originalSession = session;
     let response = await request(path, options);
+    if (session !== originalSession) return response;
     if (response.status !== 401 || !session?.refresh_token) return response;
     if (!(await refreshTokens())) return response;
+    if (session?.user?.id !== originalSession?.user?.id) return response;
     return request(path, options);
 }
 

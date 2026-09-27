@@ -130,7 +130,9 @@ scrollTo(0, 0);
 document.body.style.overflow = "hidden";
 
 // 模块模式用内存路由（容器地址是 blob URL，hash 路由会污染/失效）；独立版保持 hash 路由。
-const routerHistory = moduleMode ? VueRouter.createMemoryHistory() : VueRouter.createWebHashHistory();
+const routerHistory = moduleMode
+    ? VueRouter.createMemoryHistory()
+    : VueRouter.createWebHashHistory();
 // 与独立版 location.hash="#/loading" 等价：必须从加载页启动——loadingPage 负责注册
 // shared.game.loaded 并在就绪后转场 startPage，跳过它 mounted() 里的 loaded() 调用会抛错。
 if (moduleMode) routerHistory.replace("/loading");
@@ -249,10 +251,10 @@ router.beforeEach((to, from) => {
     }
     if (["/chartSelect", "/startPage", "/replayPage", "/loading"].includes(to.path)) {
         document.body.style.overflow = "hidden";
-        document.querySelector("div.main").overflow = "hidden";
+        document.querySelector("div.main").style.overflow = "hidden";
     } else {
         document.body.style.overflow = "auto";
-        document.querySelector("div.main").overflow = "auto";
+        document.querySelector("div.main").style.overflow = "auto";
     }
     if (window.spec.isiOSDevice && window.spec.isPhiTogetherApp)
         document
@@ -575,6 +577,7 @@ const ptAppInstance = createApp({
             shared.game.restartClearRecord();
         },
         async playChart(settings) {
+            this._playRecordOwner = ptServer.recordOwner();
             if (settings) this.playConfig = JSON.parse(JSON.stringify(settings));
             this.$router.push({ path: "/playing", query: { auto: 1 } });
             if (shared.game.restartClearRecord) shared.game.restartClearRecord();
@@ -590,99 +593,45 @@ const ptAppInstance = createApp({
             shared.game.ptRank = null; // 结算画面的本曲排名（上传后异步填入）
             const chartData = JSON.parse(sessionStorage.getItem("loadedChart"));
             const isMulti = shared.game.ptmain.gameMode === "multi";
-            const savePTCRLocally = () => {
-                return new Promise(async res => {
-                    if (this.shouldNotSaveScore) {
-                        res(true);
-                        return;
-                    }
-
-                    try {
-                        const stat = shared.game.stat;
-                        const chartId = String(chartData.id);
-                        const now = new Date().toISOString();
-                        const run = {
+            if (!this.shouldNotSaveScore) {
+                const stat = shared.game.stat;
+                const chartId = String(chartData.id);
+                const songInfo = JSON.parse(sessionStorage.getItem("chartDetailsData") || "{}");
+                try {
+                    const queued = await ptServer.queueRecord(
+                        {
+                            chart_id: chartId,
+                            song_name: String(songInfo.name || ""),
+                            difficulty: String(chartData.level || ""),
+                            rating: Number(chartData.difficulty) || 0,
                             score: Number(stat.scoreNum.toFixed(0)) || 0,
-                            // stat.accNum 是 0-1 刻度（见 sim-phi Stat.ts），服务端按百分比存
-                            acc: Number(stat.accNum) || 0,
-                            isFc: stat.lineStatus == 3,
-                            at: now,
-                        };
-
-                        if (!this.gameConfig.ptBestRecords) this.gameConfig.ptBestRecords = {};
-                        // 记录格式 [score, acc, isFc, maxAcc, runAt]：前三项是「最佳单局」
-                        // （(score, acc, isFc) 字典序最大的一局，与服务端榜单同键），
-                        // maxAcc 是历史最高精准度（RKS 口径），runAt 是该局时间。
-                        // 旧版数组（第 4 位曾是 isNew 标记）按同义迁移。
-                        const betterRun = (a, b) =>
-                            a.score !== b.score
-                                ? a.score > b.score
-                                : a.acc !== b.acc
-                                  ? a.acc > b.acc
-                                  : (a.isFc ? 1 : 0) > (b.isFc ? 1 : 0);
-                        const prev = this.gameConfig.ptBestRecords[chartId];
-                        let best = run;
-                        let maxAcc = run.acc;
-                        if (prev) {
-                            const prevRun = {
-                                score: Number(prev[0]) || 0,
-                                acc: Number(prev[1]) || 0,
-                                isFc: !!prev[2],
-                                at: typeof prev[4] === "string" ? prev[4] : "",
-                            };
-                            if (!betterRun(run, prevRun)) best = prevRun;
-                            maxAcc = Math.max(
-                                typeof prev[3] === "number" ? prev[3] : prevRun.acc,
-                                run.acc
-                            );
-                        }
-
-                        this.gameConfig.ptBestRecords[chartId] = [
-                            best.score,
-                            best.acc,
-                            best.isFc,
-                            maxAcc,
-                            best.at,
-                        ];
-
-                        // 自建排行榜：最佳单局入队上传（离线保留在 IndexedDB，
-                        // 联网后由 online 事件/下次游玩/重新进入游戏重试）。
-                        // 上传成功后拉取最新 rks 写回玩家信息条（顶栏 pzrks），
-                        // 并把本曲名次交给结算画面显示。
-                        try {
-                            const songInfo = JSON.parse(
-                                sessionStorage.getItem("chartDetailsData") || "{}"
-                            );
-                            ptServer.queueRecord(
-                                {
-                                    chart_id: chartId,
-                                    song_name: String(songInfo.name || ""),
-                                    difficulty: String(chartData.level || ""),
-                                    rating: Number(chartData.difficulty) || 0,
-                                    score: Number(best.score) || 0,
-                                    acc: (Number(best.acc) || 0) * 100,
-                                    is_fc: !!best.isFc,
-                                    max_acc: (Number(maxAcc) || 0) * 100,
-                                    run_at: best.at || now,
-                                },
-                                // 本地成绩（gameConfig.ptBestRecords）随本次快照与
-                                // pendingPtUploads 同一原子批提交，防止互相覆盖
-                                this.gameConfig
-                            ).then(ok => {
-                                if (ok) ptServer.refreshLocalPlayerRks();
+                            acc: (Number(stat.accNum) || 0) * 100,
+                            max_acc: (Number(stat.accNum) || 0) * 100,
+                            is_fc: stat.lineStatus == 3,
+                            run_at: new Date().toISOString(),
+                        },
+                        this._playRecordOwner || ptServer.recordOwner()
+                    );
+                    if (queued) {
+                        this.updateResultRank(chartId, false);
+                        void ptServer.syncPending().then(ok => {
+                            if (
+                                String(
+                                    JSON.parse(sessionStorage.getItem("loadedChart") || "{}").id
+                                ) === chartId
+                            )
                                 this.updateResultRank(chartId, ok);
-                            });
-                        } catch (e) {
-                            /* 本地成绩已保存，上报失败不影响游戏 */
-                        }
-
-                        res(true);
-                    } catch (e) {
-                        res(false);
+                        });
                     }
-                });
-            };
-            await savePTCRLocally();
+                } catch (error) {
+                    shared.game.ptRank = {
+                        text: this.$t("chartSelect.offline.scoreSaveFailed"),
+                        color: "#fe4365",
+                    };
+                    msgHandler.sendMessage(this.$t("chartSelect.offline.scoreSaveFailed"), "error");
+                    console.error(error);
+                }
+            }
             if (isMulti) {
                 shared.game.multiInstance.uploadScore();
             }
@@ -1028,6 +977,8 @@ const ptAppInstance = createApp({
         applyServerUser(user) {
             if (!user) return;
             this.noAccountMode = false;
+            this.gameConfig.ptBestRecords = {};
+            this.gameConfig.localRks = 0;
             this.gameConfig.account.userBasicInfo = {
                 userName: user.nickname || user.username,
                 id: user.id,
@@ -1039,8 +990,8 @@ const ptAppInstance = createApp({
                 isPTDeveloper: false,
             };
             recordMgr.reset(this.gameConfig.account.userBasicInfo);
-            ptServer.refreshLocalPlayerRks();
-            ptServer.flushPending();
+            void ptServer.refreshLocalPlayerRks().catch(console.error);
+            void ptServer.syncPending();
         },
         serverLogout() {
             serverApi.logout();
@@ -1050,6 +1001,8 @@ const ptAppInstance = createApp({
                 defaultConfig: null,
             };
             this.noAccountMode = true;
+            this.gameConfig.ptBestRecords = {};
+            void ptServer.activateLocalRecords().catch(console.error);
         },
         async clearLocalData(t) {
             // 原谱面管理页的「高级清理」，现居设置页。
@@ -1148,9 +1101,11 @@ const ptAppInstance = createApp({
             hook.chartInfo.composer = songInfo.composer;
             hook.chartInfo.charter = this.cleanStr(chartInfo.charter);
             hook.chartInfo.difficultyString = `${chartInfo.level} Lv.${
-                typeof chartInfo.difficulty === "string" ? chartInfo.difficulty : (
-                    chartInfo.difficulty === 0 ? "?" : Math.floor(chartInfo.difficulty).toString()
-                )
+                typeof chartInfo.difficulty === "string"
+                    ? chartInfo.difficulty
+                    : chartInfo.difficulty === 0
+                      ? "?"
+                      : Math.floor(chartInfo.difficulty).toString()
             }`;
             let saved;
             saved = localStorage.getItem("PTSavedOffsets");
@@ -1279,14 +1234,22 @@ document.getElementById("app").style.display = "block";
 //全局暴露
 shared.game.ptmain = ptmain;
 // 会话就绪后统一同步一次 rks 并清空待上传成绩（挂载早期的写回会被守卫跳过）
-if (ptServer.available()) {
-    ptServer.refreshLocalPlayerRks();
-    ptServer.flushPending();
-}
+void ptServer.activateLocalRecords().catch(console.error);
+if (ptServer.available()) void ptServer.syncPending();
 // 离线成绩同步：网络恢复时清空待上传队列
 window.addEventListener("online", () => {
-    if (ptServer.available()) ptServer.flushPending();
+    if (ptServer.available()) void ptServer.syncPending();
 });
+// Retry server outages even when the browser never emits another online event.
+setInterval(() => {
+    if (
+        !document.hidden &&
+        router.currentRoute.value.path !== "/playing" &&
+        ptServer.available() &&
+        ptmain.gameConfig.pendingScoreCount
+    )
+        void ptServer.syncPending();
+}, 30000);
 shared.game.msgHandler = msgHandler;
 shared.game.graphicHandler = graphicHandler;
 shared.game.recordMgr = recordMgr;

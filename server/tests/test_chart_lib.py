@@ -38,6 +38,20 @@ def make_lib_song(song_id="Test.Song", levels=("EZ", "IN"), with_music=True):
     return song_dir
 
 
+async def test_cover_version_changes_when_artwork_changes(client):
+    _, headers = await register_and_login(client)
+    song = make_lib_song()
+    first = (await client.get("/api/game/charts", headers=headers)).json()["charts"]
+    before = next(row for row in first if row["name"] == "Test.Song.EZ.pez")
+    (song / "illustration.png").write_bytes(b"updated-cover-with-new-size")
+    second = (await client.get("/api/game/charts", headers=headers)).json()["charts"]
+    after = next(row for row in second if row["name"] == "Test.Song.EZ.pez")
+    assert before["cover_version"] != after["cover_version"]
+    assert before["chart_id"] == after["chart_id"]
+    from routers.integration import _chart_item
+    assert _chart_item(after)["cover_version"] == after["cover_version"]
+
+
 async def test_list_charts_merges_shared_lib(client):
     _, headers = await register_and_login(client)
     make_lib_song()

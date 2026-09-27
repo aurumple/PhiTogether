@@ -130,6 +130,20 @@
         "title": "更新日誌"
     },
     "chartSelect": {
+        "offline": {
+            "downloaded": "已下載",
+            "empty": "尚無已下載譜面，請前往其他章節下載，或匯入本機譜面。",
+            "clear": "清除曲庫資訊和縮圖",
+            "clearConfirm": "僅清除曲庫資訊和列表縮圖，保留已下載譜面、收藏和成績。之後可點擊重新整理再次快取。是否繼續？",
+            "progress": "圖示快取：{0}/{1}",
+            "retryCovers": "未完成的圖示將在連線閒置時重試。",
+            "storageFailed": "曲庫快取寫入失敗，請檢查儲存空間。",
+            "pending": "待同步 {0} 張譜面",
+            "localEstimate": "本機估算，尚未同步伺服器成績",
+            "guestScore": "訪客本機成績",
+            "scoreSaveFailed": "成績儲存失敗，請檢查本機儲存空間。",
+            "connectToDownload": "目前離線，連線後可下載。"
+        },
         "play": "遊玩",
         "board": {
             "open": "榜單",
@@ -636,7 +650,7 @@
         "filterLocal": "本機匯入",
         "pausedNotice": "下載已暫停（遊玩時自動暫停，退出遊玩後繼續）",
         "downloadingNotice": "正在下載 {0} 個譜面...",
-        "serverUnreachable": "伺服端無法連線（{0}），僅顯示本地譜面",
+        "serverUnreachable": "伺服器暫時無法連線（{0}），繼續顯示已快取曲庫；已下載譜面仍可遊玩。",
         "retry": "重試",
         "loadingLocal": "正在載入本地譜面...",
         "empty": "沒有任何譜面。可點擊「全部下載」從伺服端下載，或將 .pez/.zip 檔案放到伺服端 data/charts/ 目錄後重新整理。",

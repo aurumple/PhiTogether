@@ -130,6 +130,20 @@
         "title": "更新日志"
     },
     "chartSelect": {
+        "offline": {
+            "downloaded": "已下载",
+            "empty": "尚无已下载谱面，请前往其他章节下载，或导入本地谱面。",
+            "clear": "清理曲库信息和缩略图",
+            "clearConfirm": "仅清理曲库信息和列表缩略图，保留已下载谱面、收藏和成绩。之后可点击刷新重新缓存。是否继续？",
+            "progress": "图标缓存：{0}/{1}",
+            "retryCovers": "未完成的图标将在联网空闲时重试。",
+            "storageFailed": "曲库缓存写入失败，请检查存储空间。",
+            "pending": "待同步 {0} 张谱面",
+            "localEstimate": "本地估算，尚未同步服务端成绩",
+            "guestScore": "游客本地成绩",
+            "scoreSaveFailed": "成绩保存失败，请检查本地存储空间。",
+            "connectToDownload": "当前离线，联网后可下载。"
+        },
         "play": "游玩",
         "board": {
             "open": "榜单",
@@ -637,7 +651,7 @@
         "filterLocal": "本地导入",
         "pausedNotice": "下载已暂停（游玩时自动暂停，退出游玩后继续）",
         "downloadingNotice": "正在下载 {0} 个谱面...",
-        "serverUnreachable": "服务端不可达（{0}），仅显示本地谱面",
+        "serverUnreachable": "服务端暂不可达（{0}），继续显示已缓存曲库；已下载谱面仍可游玩。",
         "retry": "重试",
         "loadingLocal": "正在加载本地谱面...",
         "empty": "没有任何谱面。可点击「全部下载」从服务端下载，或将 .pez/.zip 文件放到服务端 data/charts/ 目录后刷新。",

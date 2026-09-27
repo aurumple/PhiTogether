@@ -125,3 +125,9 @@ higher `max_acc` still improves rks.
 .venv/bin/pip install -r requirements-dev.txt
 .venv/bin/python -m pytest tests/ -v
 ```
+
+## Client cache and offline score synchronization
+
+`GET /api/game/charts` and the OneTap chart catalogue expose `cover_version` for library artwork (file modification time plus size). Clients use it to invalidate persistent list thumbnails without changing chart IDs. Cover bytes and chart downloads remain authenticated and self-hosted.
+
+Offline scores use the existing idempotent record endpoint and merge rules; no database schema change is needed. Clients keep an account-scoped durable outbox, cache `/api/game/pt/me` (OneTap `game.me`) as their Best30 baseline, and retry after the server recovers. The response already includes `best_acc`, which must be used independently of the displayed best-run `acc` when calculating offline RKS. Guest scores are never submitted automatically.

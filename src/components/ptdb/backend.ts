@@ -58,14 +58,15 @@ const idbBackend: PtdbBackend = {
         return new Promise((res, rej) => {
             openDB()
                 .then(db => {
-                    const objStore = db
-                        .transaction([ObjectStores.Chart], "readwrite")
-                        .objectStore(ObjectStores.Chart);
+                    const tx = db.transaction([ObjectStores.Chart], "readwrite");
+                    tx.oncomplete = () => res(true);
+                    tx.onerror = () => rej(tx.error);
+                    tx.onabort = () => rej(tx.error || new Error("Storage write aborted"));
+                    const objStore = tx.objectStore(ObjectStores.Chart);
                     const getReq = objStore.get(chart.id);
                     getReq.onsuccess = e => {
                         if (getReq.result) objStore.put(chart);
                         else objStore.add(chart);
-                        res(true);
                     };
                     getReq.onerror = e => rej(e);
                 })
@@ -142,14 +143,15 @@ const idbBackend: PtdbBackend = {
         return new Promise((res, rej) => {
             openDB()
                 .then(db => {
-                    const objStore = db
-                        .transaction([ObjectStores.Song], "readwrite")
-                        .objectStore(ObjectStores.Song);
+                    const tx = db.transaction([ObjectStores.Song], "readwrite");
+                    tx.oncomplete = () => res(true);
+                    tx.onerror = () => rej(tx.error);
+                    tx.onabort = () => rej(tx.error || new Error("Storage write aborted"));
+                    const objStore = tx.objectStore(ObjectStores.Song);
                     const getReq = objStore.get(song.id);
                     getReq.onsuccess = e => {
                         if (getReq.result) objStore.put(song);
                         else objStore.add(song);
-                        res(true);
                     };
                     getReq.onerror = e => rej(e);
                 })
@@ -224,8 +226,7 @@ const idbBackend: PtdbBackend = {
         for (const [type, entry] of skin.files instanceof Map
             ? skin.files.entries()
             : Object.entries(skin.files || {})) {
-            const kind =
-                entry.kind || (String(type).startsWith("HitSong") ? "audio" : "image");
+            const kind = entry.kind || (String(type).startsWith("HitSong") ? "audio" : "image");
             const bytes =
                 entry.file instanceof Blob
                     ? new Uint8Array(await entry.file.arrayBuffer())
@@ -246,7 +247,13 @@ const idbBackend: PtdbBackend = {
                 .then(db => {
                     db.transaction([ObjectStores.Skin], "readwrite")
                         .objectStore(ObjectStores.Skin)
-                        .add({ id: skin.id, name: skin.name, author: skin.author, files, config: skin.config });
+                        .add({
+                            id: skin.id,
+                            name: skin.name,
+                            author: skin.author,
+                            files,
+                            config: skin.config,
+                        });
                     res(skin.id);
                 })
                 .catch(e => rej(e));
@@ -300,22 +307,7 @@ const idbBackend: PtdbBackend = {
         });
     },
     putUserData(id, value) {
-        return new Promise((res, rej) => {
-            openDB()
-                .then(db => {
-                    const objStore = db
-                        .transaction([ObjectStores.UserData], "readwrite")
-                        .objectStore(ObjectStores.UserData);
-                    const getReq = objStore.get(id);
-                    getReq.onsuccess = e => {
-                        if (getReq.result) objStore.put({ id, gameConfig: value });
-                        else objStore.add({ id, gameConfig: value });
-                        res(true);
-                    };
-                    getReq.onerror = e => rej(e);
-                })
-                .catch(e => rej(e));
-        });
+        return this.updateUserData(id, () => value).then(() => true);
     },
     updateUserData(id, mutator) {
         return this.updateUserDataBatch([{ id, mutator }]).then(nexts => nexts[0]);
@@ -329,7 +321,9 @@ const idbBackend: PtdbBackend = {
                     const tx = db.transaction([ObjectStores.UserData], "readwrite");
                     const objStore = tx.objectStore(ObjectStores.UserData);
                     const nexts: any[] = [];
-                    let pending = items.length;
+                    tx.oncomplete = () => res(nexts);
+                    tx.onerror = () => rej(tx.error || new Error("Storage write failed"));
+                    tx.onabort = () => rej(tx.error || new Error("Storage write aborted"));
                     items.forEach((item, i) => {
                         const getReq = objStore.get(item.id);
                         getReq.onsuccess = e => {
@@ -338,17 +332,17 @@ const idbBackend: PtdbBackend = {
                                 const next = item.mutator(cur);
                                 nexts[i] = next;
                                 if (next !== undefined) {
-                                    if (getReq.result) objStore.put({ id: item.id, gameConfig: next });
+                                    if (getReq.result)
+                                        objStore.put({ id: item.id, gameConfig: next });
                                     else objStore.add({ id: item.id, gameConfig: next });
                                 }
-                                if (!--pending) res(nexts);
                             } catch (err) {
+                                tx.abort();
                                 rej(err);
                             }
                         };
                         getReq.onerror = e => rej(e);
                     });
-                    if (!items.length) res([]);
                 })
                 .catch(e => rej(e));
         });
@@ -387,7 +381,8 @@ function notifyStorageError(e: any) {
         const handler = shared.game && shared.game.msgHandler;
         if (!handler || !handler.sendMessage) return;
         const t = shared.game.i18n && shared.game.i18n.t;
-        const key = e.code === "CONTENT_INVALID" ? "storage.contentInvalid" : "storage.quotaExceeded";
+        const key =
+            e.code === "CONTENT_INVALID" ? "storage.contentInvalid" : "storage.quotaExceeded";
         handler.sendMessage((t && t(key)) || key, "error");
     } catch {
         /* 提示失败不影响错误继续向上传播 */

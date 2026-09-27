@@ -289,6 +289,7 @@ def _chart_item(entry: dict) -> dict:
         "contentId": entry["name"],
         "contentBytes": entry["size"],
         "cover": f"{song_id}.cover.png" if has_cover else None,
+        "cover_version": entry.get("cover_version", ""),
     }
 
 

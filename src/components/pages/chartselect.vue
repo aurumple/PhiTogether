@@ -5,11 +5,15 @@
     import ploading from "@utils/js/ploading.js";
     import { authFetch, moduleApi } from "@utils/serverApi";
     import { chartDownloadQueue } from "@utils/chartDownloadQueue";
-    import { ptServer } from "@utils/ptServer";
     import {
-        formatChartLevel,
-        mergeLocalSongCharts,
-    } from "@utils/localChartGrouping.mjs";
+        cachedCover,
+        readLibrary,
+        saveLibrary,
+        clearLibrary,
+        libraryRevision,
+    } from "@utils/libraryCache";
+    import { ptServer } from "@utils/ptServer";
+    import { formatChartLevel, mergeLocalSongCharts } from "@utils/localChartGrouping.mjs";
 
     // 单人游戏：Phigros 式章节选曲，统一「浏览 / 下载 / 游玩」。
     // 客户端只拉取服务端谱面资源列表（含章节归属），.pez 资源按需下载；
@@ -29,7 +33,8 @@
         data() {
             return {
                 search: "",
-                selectedChapter: "",
+                selectedChapter: "__downloaded__",
+                cacheProgress: { done: 0, total: 0, failed: 0 },
                 chapters: [],
                 serverFiles: [],
                 localSongs: [],
@@ -42,6 +47,7 @@
                 favouriteSongs: [],
                 coverUrls: {},
                 loadError: "",
+                cacheError: "",
                 loading: false,
                 settingsOpen: false,
                 playSettings: {
@@ -58,7 +64,10 @@
         computed: {
             pendingCount() {
                 return this.queueItems.filter(
-                    i => i.status === "queued" || i.status === "downloading" || i.status === "importing"
+                    i =>
+                        i.status === "queued" ||
+                        i.status === "downloading" ||
+                        i.status === "importing"
                 ).length;
             },
             localById() {
@@ -77,6 +86,7 @@
                             composer: base.composer || "",
                             illustrator: base.illustrator || "",
                             cover: base.cover || null,
+                            coverVersion: base.coverVersion || "",
                             chapter: base.chapter || "",
                             chapterOrder:
                                 typeof base.chapterOrder === "number" ? base.chapterOrder : 999,
@@ -95,11 +105,13 @@
                         composer: file.composer,
                         illustrator: file.illustrator,
                         cover: file.cover,
+                        coverVersion: file.cover_version,
                         chapter: file.chapter,
                         chapterOrder: file.chapter_order,
                     });
                     const link = this.importedIndex[file.name] || null;
-                    const localSong = link && link.songId ? this.localById[String(link.songId)] : null;
+                    const localSong =
+                        link && link.songId ? this.localById[String(link.songId)] : null;
                     let localChart = null;
                     if (localSong) {
                         const charts = localSong.charts || [];
@@ -170,7 +182,15 @@
                     if (!byChapter.has(name)) byChapter.set(name, []);
                     byChapter.get(name).push(group);
                 }
-                const items = [];
+                const items = [
+                    {
+                        id: "__downloaded__",
+                        name: this.$t("chartSelect.offline.downloaded"),
+                        groups: this.songGroups
+                            .filter(g => g.diffs.some(d => d.localChart))
+                            .map(g => ({ ...g, diffs: g.diffs.filter(d => d.localChart) })),
+                    },
+                ];
                 const favGroups = this.songGroups.filter(g => this.isFavourite(g));
                 if (favGroups.length)
                     items.push({
@@ -213,7 +233,8 @@
             currentChapter() {
                 if (!this.chapterItems.length) return null;
                 return (
-                    this.chapterItems.find(i => i.id === this.selectedChapter) || this.chapterItems[0]
+                    this.chapterItems.find(i => i.id === this.selectedChapter) ||
+                    this.chapterItems[0]
                 );
             },
             visibleSongs() {
@@ -223,13 +244,9 @@
                 const query = this.search.trim().toLowerCase();
                 if (query) {
                     list = list.filter(g =>
-                        [g.name, g.composer, g.illustrator]
-                            .join(" ")
-                            .toLowerCase()
-                            .includes(query)
+                        [g.name, g.composer, g.illustrator].join(" ").toLowerCase().includes(query)
                     );
                 }
-                if (this.forceOffline) list = list.filter(g => g.diffs.some(d => d.localChart));
                 return list;
             },
             canBoard() {
@@ -271,7 +288,9 @@
                 );
             },
             queueItemOf(diff) {
-                return diff.file ? this.queueItems.find(i => i.name === diff.file.name) || null : null;
+                return diff.file
+                    ? this.queueItems.find(i => i.name === diff.file.name) || null
+                    : null;
             },
             diffState(diff) {
                 const item = this.queueItemOf(diff);
@@ -292,6 +311,12 @@
                 else this.expandedKey = this.expandedKey === group.key ? null : group.key;
             },
             downloadDiff(diff) {
+                if (this.forceOffline) {
+                    shared.game.msgHandler.sendMessage(
+                        this.$t("chartSelect.offline.connectToDownload")
+                    );
+                    return;
+                }
                 if (!diff.file || diff.file.valid === false) return;
                 chartDownloadQueue.enqueue([diff.file]);
             },
@@ -300,6 +325,12 @@
                 if (item) chartDownloadQueue.retry(item.name);
             },
             async updateDiff(diff) {
+                if (this.forceOffline) {
+                    shared.game.msgHandler.sendMessage(
+                        this.$t("chartSelect.offline.connectToDownload")
+                    );
+                    return;
+                }
                 if (!diff.file || diff.file.valid === false) return;
                 await this.deleteDiffSilent(diff);
                 chartDownloadQueue.enqueue([diff.file]);
@@ -428,9 +459,13 @@
 
             // ===== 数据装载 =====
             async loadServerList() {
-                if (this.forceOffline) return;
+                if (this._loadingServer) return;
+                this._loadingServer = true;
+                this._cacheCleared = false;
+                const cacheRevision = libraryRevision();
                 this.loading = true;
                 this.loadError = "";
+                this.cacheError = "";
                 try {
                     const api = moduleApi();
                     if (api && api.game) {
@@ -439,14 +474,18 @@
                         const charts = [];
                         let chapters = [];
                         for (let page = 1; ; page++) {
-                            const data = await api.game.call("game.charts", { page, pageSize: 200 });
+                            const data = await api.game.call("game.charts", {
+                                page,
+                                pageSize: 200,
+                            });
                             const items = (data && data.items) || [];
                             for (const item of items) {
                                 const contentId = String(item.contentId || "");
                                 charts.push({
                                     // song_id 可含点号（如 光.姜米條）：必须用集成条目自带的 song_id，
                                     // 按 contentId 切第一段会把同前缀的歌并成一组。
-                                    song_id: String(item.song_id || "") || String(item.chart_id || ""),
+                                    song_id:
+                                        String(item.song_id || "") || String(item.chart_id || ""),
                                     name: contentId,
                                     path: "/api/game/charts/" + encodeURIComponent(contentId),
                                     size: Number(item.contentBytes) || 0,
@@ -460,25 +499,46 @@
                                     composer: item.composer || "",
                                     illustrator: item.illustrator || "",
                                     cover: item.cover || null,
+                                    cover_version: item.cover_version || "",
                                 });
                             }
                             if (!chapters.length && data && data.chapters) chapters = data.chapters;
                             const total = data ? Number(data.total) || 0 : 0;
                             if (!items.length || charts.length >= total || page >= 200) break;
                         }
+                        if (cacheRevision !== libraryRevision()) return;
                         this.serverFiles = charts;
                         this.chapters = chapters;
                     } else {
-                        const resp = await authFetch("/api/game/charts");
+                        const controller = new AbortController();
+                        const timeout = setTimeout(() => controller.abort(), 10000);
+                        let resp;
+                        try {
+                            resp = await authFetch("/api/game/charts", {
+                                signal: controller.signal,
+                            });
+                        } finally {
+                            clearTimeout(timeout);
+                        }
                         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
                         const data = await resp.json();
+                        if (cacheRevision !== libraryRevision()) return;
                         this.serverFiles = data.charts || [];
                         this.chapters = data.chapters || [];
                     }
+                    this.forceOffline = false;
+                    this._lastServerLoad = Date.now();
+                    try {
+                        await saveLibrary(this.serverFiles, this.chapters, cacheRevision);
+                    } catch {
+                        this.cacheError = this.$t("chartSelect.offline.storageFailed");
+                    }
+                    void this.prefetchCovers();
                 } catch (e) {
-                    this.loadError = (moduleApi() ? "[M] " : "[E] ") + (e && e.message || this.$t("chartManage.loadFailed"));
-                    this.serverFiles = [];
+                    this.forceOffline = true;
+                    this.loadError = e?.message || this.$t("chartManage.loadFailed");
                 } finally {
+                    this._loadingServer = false;
                     this.loading = false;
                 }
             },
@@ -493,16 +553,37 @@
             async loadImported() {
                 this.importedIndex = await chartDownloadQueue.getImportedIndex();
             },
-            async refreshAll() {
+            async refreshAll(force = true) {
+                if (this._refreshing) return this._refreshing;
+                this._refreshing = this.refreshLibrary(force).finally(() => {
+                    this._refreshing = null;
+                });
+                return this._refreshing;
+            },
+            async refreshLibrary(force) {
                 this.loading = true;
+                await ptServer.activateLocalRecords().catch(console.error);
                 await Promise.all([this.loadImported(), this.loadLocal()]);
-                await this.loadServerList();
+                if (!this._cacheLoaded) {
+                    const cached = await readLibrary();
+                    if (cached) {
+                        this.serverFiles = cached.charts;
+                        this.chapters = cached.chapters;
+                    }
+                    this.selectedChapter = await ptdb.gameConfig
+                        .get("selectedChapter", "__downloaded__")
+                        .catch(() => "__downloaded__");
+                    this._cacheLoaded = true;
+                }
+                this.loading = false;
+                if (force || !this._lastServerLoad || Date.now() - this._lastServerLoad > 60000)
+                    void this.loadServerList();
                 this.loading = false;
                 if (
                     this.selectedChapter &&
                     !this.chapterItems.some(i => i.id === this.selectedChapter)
                 ) {
-                    this.selectedChapter = "";
+                    this.selectedChapter = "__downloaded__";
                 }
             },
             refreshQueue() {
@@ -512,40 +593,92 @@
 
             // ===== 曲绘懒加载 =====
             async ensureCover(key, coverUrl, localSongId) {
-                if (this.coverUrls[key] !== undefined) return;
-                this.coverUrls[key] = "";
-                let url = "";
+                const group = this.songGroups.find(g => g.cover === coverUrl && coverUrl);
+                const version = group?.coverVersion || "";
+                const stamp = `${coverUrl}:${localSongId}:${version}`;
+                if (this._coverStamps?.[key] === stamp && this.coverUrls[key]) return;
+                if (!this._coverStamps) this._coverStamps = {};
+                const song = this.localById[String(localSongId)];
                 try {
-                    const api = moduleApi();
-                    if (coverUrl && api && api.game && !coverUrl.includes("/")) {
-                        // 模块模式：曲绘是内容标识（<songID>.cover.png），走宿主下载通道取字节；
-                        // 取回即释放大对象引用，曲绘只留 object URL，不占模块存储配额。
-                        const got = await api.game.download(coverUrl);
-                        const bytes = await api.blobs.read(got.blobId);
-                        void api.blobs.release(got.blobId).catch(() => undefined);
-                        url = URL.createObjectURL(new Blob([bytes], { type: "image/png" }));
-                    } else if (coverUrl) {
-                        const sep = coverUrl.includes("?") ? "&" : "?";
-                        const resp = await authFetch(coverUrl + sep + "nocache=nocache");
-                        if (resp.ok) url = URL.createObjectURL(await resp.blob());
-                    } else if (localSongId) {
-                        const song = this.localById[String(localSongId)];
-                        const virtual = song && song.illustration;
-                        if (virtual) {
-                            const resp = await ptdb.fetch(virtual);
-                            if (resp.ok) url = URL.createObjectURL(await resp.blob());
-                        }
-                    }
+                    const data = await cachedCover(
+                        coverUrl || "",
+                        version,
+                        song?.illustration || ""
+                    );
+                    this.coverUrls[key] = data;
+                    this._coverStamps[key] = stamp;
                 } catch {
-                    url = "";
+                    /* Failed images retry on refresh/reconnect. */
                 }
-                this.coverUrls[key] = url;
+            },
+            async prefetchCovers() {
+                if (this._prefetching) return;
+                this._prefetching = true;
+                const generation = libraryRevision();
+                const groups = this.songGroups.filter(g => g.cover);
+                this.cacheProgress = { done: 0, total: groups.length, failed: 0 };
+                try {
+                    // Two workers keep the UI responsive; don't compete with gameplay or chart downloads.
+                    let next = 0;
+                    const worker = async () => {
+                        while (next < groups.length && generation === libraryRevision()) {
+                            if (chartDownloadQueue.paused || chartDownloadQueue.busy) break;
+                            const group = groups[next++];
+                            const song = this.localById[String(group.localSongId)];
+                            try {
+                                const data = await cachedCover(
+                                    group.cover,
+                                    group.coverVersion,
+                                    song?.illustration || ""
+                                );
+                                if (generation !== libraryRevision()) break;
+                                this.coverUrls[group.key] = data;
+                                if (data) this.cacheProgress.done++;
+                                else this.cacheProgress.failed++;
+                            } catch {
+                                this.cacheProgress.failed++;
+                            }
+                        }
+                    };
+                    await Promise.all([worker(), worker()]);
+                    this.observeRows();
+                } finally {
+                    this._prefetching = false;
+                }
+            },
+            async clearLibraryCache() {
+                if (
+                    !(await shared.game.msgHandler.confirm(
+                        this.$t("chartSelect.offline.clearConfirm")
+                    ))
+                )
+                    return;
+                this._cacheCleared = true;
+                this._observer?.disconnect();
+                await clearLibrary();
+                this.serverFiles = [];
+                this.chapters = [];
+                this.coverUrls = {};
+                this._coverStamps = {};
+                this.cacheProgress = { done: 0, total: 0, failed: 0 };
+                this._lastServerLoad = Date.now();
+                this.loadError = "";
+                this.cacheError = "";
             },
             observeRows() {
                 if (!this._observer || !this.$el) return;
-                const rows = this.$el.querySelectorAll("[data-coverkey]:not([data-observed])");
+                const rows = this.$el.querySelectorAll("[data-coverkey]");
                 for (const row of rows) {
-                    row.setAttribute("data-observed", "1");
+                    const stamp = [
+                        row.getAttribute("data-coverurl"),
+                        row.getAttribute("data-localsong"),
+                    ].join(":");
+                    if (
+                        row.getAttribute("data-observed") === stamp &&
+                        this.coverUrls[row.getAttribute("data-coverkey")]
+                    )
+                        continue;
+                    row.setAttribute("data-observed", stamp);
                     this._observer.observe(row);
                 }
             },
@@ -562,10 +695,20 @@
             this.refreshQueue();
             this.boardKey = null;
             this.boards = {}; // 成绩可能刚变（游玩后返回），榜单重新懒加载
-            await this.refreshAll();
+            await this.refreshAll(false);
         },
         mounted() {
-            if (this.$route.query.offline == 1) this.forceOffline = true;
+            this._online = () => {
+                if (this.$route.path === "/chartSelect") this.refreshAll();
+            };
+            window.addEventListener("online", this._online);
+            this._retryTimer = setInterval(() => {
+                if (this.$route.path !== "/chartSelect" || document.hidden || this._cacheCleared)
+                    return;
+                if (this.forceOffline) void this.loadServerList();
+                else if (this.cacheProgress.done < this.cacheProgress.total)
+                    void this.prefetchCovers();
+            }, 30000);
             this._seenDone = new Set(
                 chartDownloadQueue.items.filter(i => i.status === "done").map(i => i.name)
             );
@@ -610,7 +753,7 @@
                 .get("favouriteSongs", [])
                 .then(v => (this.favouriteSongs = v))
                 .catch(() => {});
-            this.refreshAll();
+            this.refreshAll(false);
         },
         updated() {
             this.observeRows();
@@ -621,11 +764,18 @@
             ploading.r("loadChart");
         },
         beforeUnmount() {
+            clearInterval(this._retryTimer);
+            window.removeEventListener("online", this._online);
             if (this._unsubscribe) this._unsubscribe();
             if (this._observer) this._observer.disconnect();
             for (const key of Object.keys(this.coverUrls)) {
                 if (this.coverUrls[key]) URL.revokeObjectURL(this.coverUrls[key]);
             }
+        },
+        watch: {
+            selectedChapter(value) {
+                ptdb.gameConfig.save(value, "selectedChapter").catch(() => {});
+            },
         },
         meta: {
             keepAlive: true,
@@ -660,14 +810,27 @@
             </div>
 
             <div v-if="settingsOpen" class="csSettings">
+                <input
+                    type="button"
+                    :value="$t('chartSelect.offline.clear')"
+                    @click="clearLibraryCache()"
+                />
                 <label class="csSettingItem">
                     {{ $t("chartSelect.playConfig.speed") }}
                     <select v-model="playSettings.speed">
                         <option value="">{{ $t("chartSelect.playConfig.speeds.normal") }}</option>
-                        <option value="0.5">{{ $t("chartSelect.playConfig.speeds.slowest") }}</option>
-                        <option value="0.75">{{ $t("chartSelect.playConfig.speeds.slower") }}</option>
-                        <option value="1.25">{{ $t("chartSelect.playConfig.speeds.faster") }}</option>
-                        <option value="1.5">{{ $t("chartSelect.playConfig.speeds.fastest") }}</option>
+                        <option value="0.5">
+                            {{ $t("chartSelect.playConfig.speeds.slowest") }}
+                        </option>
+                        <option value="0.75">
+                            {{ $t("chartSelect.playConfig.speeds.slower") }}
+                        </option>
+                        <option value="1.25">
+                            {{ $t("chartSelect.playConfig.speeds.faster") }}
+                        </option>
+                        <option value="1.5">
+                            {{ $t("chartSelect.playConfig.speeds.fastest") }}
+                        </option>
                     </select>
                 </label>
                 <label class="csSettingItem">
@@ -701,6 +864,11 @@
                 <input type="button" :value="$t('chartManage.retry')" @click="loadServerList()" />
             </div>
 
+            <div v-if="cacheError" class="csNotice csNoticeError">{{ cacheError }}</div>
+            <div v-if="cacheProgress.total" class="csNotice">
+                {{ $t("chartSelect.offline.progress", [cacheProgress.done, cacheProgress.total]) }}
+                <span v-if="cacheProgress.failed">{{ $t("chartSelect.offline.retryCovers") }}</span>
+            </div>
             <!-- 章节条 -->
             <div class="csChapters">
                 <div
@@ -734,7 +902,11 @@
                     {{ $t("chartManage.loadingLocal") }}
                 </div>
                 <div v-else-if="!visibleSongs.length" class="csEmpty">
-                    {{ forceOffline ? $t("chartSelect.chartListIsEmptyOffline") : $t("chartSelect.chartListIsEmpty") }}
+                    {{
+                        currentChapter?.id === "__downloaded__"
+                            ? $t("chartSelect.offline.empty")
+                            : $t("chartSelect.chartListIsEmpty")
+                    }}
                 </div>
 
                 <div
@@ -743,15 +915,25 @@
                     class="csRow"
                     :class="{ csRowOpen: expandedKey === group.key }"
                 >
-                    <div class="csRowMain" @click="expandedKey = expandedKey === group.key ? null : group.key">
+                    <div
+                        class="csRowMain"
+                        @click="expandedKey = expandedKey === group.key ? null : group.key"
+                    >
                         <div
                             class="csCoverWrap"
                             :data-coverkey="group.key"
                             :data-coverurl="group.cover || ''"
                             :data-localsong="group.localSongId || ''"
                         >
-                            <img v-if="coverUrls[group.key]" class="csCover" :src="coverUrls[group.key]" alt="" />
-                            <div v-else class="csCover csCoverEmpty">{{ coverInitial(group.name) }}</div>
+                            <img
+                                v-if="coverUrls[group.key]"
+                                class="csCover"
+                                :src="coverUrls[group.key]"
+                                alt=""
+                            />
+                            <div v-else class="csCover csCoverEmpty">
+                                {{ coverInitial(group.name) }}
+                            </div>
                         </div>
                         <div class="csRowInfo">
                             <div class="csRowName">
@@ -760,11 +942,15 @@
                                     v-if="isFavourite(group)"
                                     class="csFavOn"
                                     :title="$t('chartSelect.favourites.remove')"
-                                >★</span>
+                                >
+                                    ★
+                                </span>
                             </div>
                             <div class="csRowMeta">
                                 {{ group.composer || $t("chartManage.unknownComposer") }}
-                                <template v-if="group.illustrator"> × {{ group.illustrator }}</template>
+                                <template v-if="group.illustrator">
+                                    × {{ group.illustrator }}
+                                </template>
                             </div>
                         </div>
                         <div class="csBadges">
@@ -774,141 +960,281 @@
                                 class="csBadge"
                                 :class="['csBadge-' + diffState(diff).kind]"
                                 :style="{ backgroundColor: levelColor(diff.level) }"
-                                :title="diff.charter ? $t('chartManage.charter', [diff.charter]) : ''"
+                                :title="
+                                    diff.charter ? $t('chartManage.charter', [diff.charter]) : ''
+                                "
                                 @click.stop="onBadge(group, diff)"
                             >
                                 <span class="csBadgeLv">{{ diff.level }}</span>
                                 <span class="csBadgeRating">{{ ratingText(diff) }}</span>
                                 <span v-if="diffState(diff).kind === 'done'" class="csBadgeMark">
-                                    <svg viewBox="0 0 12 12" width="11" height="11" aria-hidden="true">
-                                        <path d="M3 6.5 L5.2 8.8 L9 3.6" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                                    <svg
+                                        viewBox="0 0 12 12"
+                                        width="11"
+                                        height="11"
+                                        aria-hidden="true"
+                                    >
+                                        <path
+                                            d="M3 6.5 L5.2 8.8 L9 3.6"
+                                            fill="none"
+                                            stroke="#fff"
+                                            stroke-width="2"
+                                            stroke-linecap="round"
+                                            stroke-linejoin="round"
+                                        />
                                     </svg>
                                 </span>
-                                <span v-else-if="diffState(diff).kind === 'busy'" class="csBadgeMark csBadgePct">
+                                <span
+                                    v-else-if="diffState(diff).kind === 'busy'"
+                                    class="csBadgeMark csBadgePct"
+                                >
                                     {{ diffState(diff).item.progress || 0 }}
                                 </span>
-                                <span v-else-if="diffState(diff).kind === 'failed'" class="csBadgeMark">!</span>
-                                <span v-else-if="diffState(diff).kind === 'broken'" class="csBadgeMark">!</span>
-                                <span v-else-if="diffState(diff).kind === 'queued'" class="csBadgeMark">…</span>
+                                <span
+                                    v-else-if="diffState(diff).kind === 'failed'"
+                                    class="csBadgeMark"
+                                >
+                                    !
+                                </span>
+                                <span
+                                    v-else-if="diffState(diff).kind === 'broken'"
+                                    class="csBadgeMark"
+                                >
+                                    !
+                                </span>
+                                <span
+                                    v-else-if="diffState(diff).kind === 'queued'"
+                                    class="csBadgeMark"
+                                >
+                                    …
+                                </span>
                                 <span v-else class="csBadgeMark">
-                                    <svg viewBox="0 0 12 12" width="11" height="11" aria-hidden="true">
-                                        <path d="M6 2.5 L6 8 M3.5 6.5 L6 9 L8.5 6.5" fill="none" stroke="#fff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+                                    <svg
+                                        viewBox="0 0 12 12"
+                                        width="11"
+                                        height="11"
+                                        aria-hidden="true"
+                                    >
+                                        <path
+                                            d="M6 2.5 L6 8 M3.5 6.5 L6 9 L8.5 6.5"
+                                            fill="none"
+                                            stroke="#fff"
+                                            stroke-width="1.6"
+                                            stroke-linecap="round"
+                                            stroke-linejoin="round"
+                                        />
                                     </svg>
                                 </span>
                             </div>
                         </div>
-                        <div class="csChevron" :class="{ csChevronOpen: expandedKey === group.key }">
+                        <div
+                            class="csChevron"
+                            :class="{ csChevronOpen: expandedKey === group.key }"
+                        >
                             <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
-                                <path d="M3 4.5 L6 8 L9 4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+                                <path
+                                    d="M3 4.5 L6 8 L9 4.5"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="1.6"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                />
                             </svg>
                         </div>
                     </div>
 
                     <div v-if="expandedKey === group.key" class="csDetail">
                         <div v-for="diff in group.diffs" :key="diff.key" class="csDiffWrap">
-                        <div class="csDiffRow">
-                            <div class="csDiffInfo">
-                                <span class="csDiffLv" :style="{ backgroundColor: levelColor(diff.level) }">{{ diff.level }}</span>
-                                <span class="csDiffText">
-                                    Lv.{{ ratingText(diff) }}
-                                    <template v-if="diff.charter"> · {{ $t("chartManage.charter", [diff.charter]) }}</template>
-                                    <template v-if="diff.file && !diff.localChart"> · {{ formatSize(diff.file.size) }}</template>
-                                    <template v-if="diff.outdated"> · {{ $t("chartManage.outdated") }}</template>
-                                    <template v-if="diff.file && diff.file.valid === false"> · {{ diff.file.error }}</template>
-                                    <template v-if="bestScoreOf(diff.localChart)">
-                                        · {{ scoreBadge(bestScoreOf(diff.localChart)) }}
-                                        {{ String(bestScoreOf(diff.localChart).score).padStart(7, "0") }}
-                                        ({{ (bestScoreOf(diff.localChart).acc * 100).toFixed(2) }}%)
-                                    </template>
-                                </span>
-                            </div>
-                            <div class="csDiffActions">
-                                <template v-if="diffState(diff).kind === 'busy'">
-                                    <div class="csProgressWrap">
-                                        <div class="csProgressBar">
-                                            <div class="csProgressFill" :style="{ width: (diffState(diff).item.progress || 0) + '%' }"></div>
-                                        </div>
-                                        <span class="csProgressText">
-                                            {{ diffState(diff).item.status === "importing" ? $t("chartManage.importing") : (diffState(diff).item.progress || 0) + "%" }}
-                                        </span>
-                                    </div>
-                                </template>
-                                <template v-else-if="diffState(diff).kind === 'queued'">
-                                    <span class="csTag">{{ $t("chartManage.tagQueued") }}</span>
-                                </template>
-                                <template v-else-if="diffState(diff).kind === 'failed'">
-                                    <span class="csFailedText">{{ diffState(diff).item.error || $t("chartManage.downloadFailed") }}</span>
-                                    <input type="button" :value="$t('chartManage.retry')" @click="retryItem(diff)" />
-                                </template>
-                                <template v-else-if="diffState(diff).kind === 'broken'">
-                                    <span class="csTag csTagBroken" :title="diff.file.error">{{ $t("chartManage.tagBroken") }}</span>
-                                </template>
-                                <template v-else-if="diffState(diff).kind === 'done'">
-                                    <input type="button" class="csPlayBtn" :value="$t('chartSelect.play')" @click="playDiff(group, diff)" />
-                                    <input
-                                        v-if="diff.file && diff.outdated"
-                                        type="button"
-                                        :value="$t('chartManage.update')"
-                                        @click="updateDiff(diff)"
-                                    />
-                                    <input type="button" :value="$t('chartManage.delete')" @click="deleteDiff(group, diff)" />
-                                </template>
-                                <template v-else>
-                                    <input
-                                        v-if="diff.file"
-                                        type="button"
-                                        :value="diff.link ? $t('chartManage.redownload') : $t('chartManage.download')"
-                                        @click="downloadDiff(diff)"
-                                    />
-                                </template>
-                                <input
-                                    v-if="canBoard && chartIdOf(diff)"
-                                    type="button"
-                                    class="csBoardBtn"
-                                    :value="boardKey === diff.key ? $t('chartSelect.board.close') : $t('chartSelect.board.open')"
-                                    @click="toggleBoard(diff)"
-                                />
-                            </div>
-                        </div>
-                        <div v-if="boardKey === diff.key" class="csBoard">
-                            <template v-if="boards[diff.key]">
-                                <div v-if="boards[diff.key].loading" class="csBoardNote">
-                                    {{ $t("chartSelect.board.loading") }}
-                                </div>
-                                <div v-else-if="boards[diff.key].error" class="csBoardNote csBoardError">
-                                    {{ boards[diff.key].error }}
-                                </div>
-                                <div v-else-if="!boards[diff.key].entries.length" class="csBoardNote">
-                                    {{ $t("chartSelect.board.empty") }}
-                                </div>
-                                <template v-else>
-                                    <div
-                                        v-for="entry in boards[diff.key].entries"
-                                        :key="entry.user_id"
-                                        class="csBoardRow"
-                                        :class="{ csBoardMe: entry.is_me }"
+                            <div class="csDiffRow">
+                                <div class="csDiffInfo">
+                                    <span
+                                        class="csDiffLv"
+                                        :style="{ backgroundColor: levelColor(diff.level) }"
                                     >
-                                        <span class="csBoardRank">#{{ entry.rank }}</span>
-                                        <span class="csBoardName">{{ entry.name }}</span>
-                                        <span class="csBoardScore">{{ String(entry.score).padStart(7, "0") }}</span>
-                                        <span class="csBoardAcc">{{ Number(entry.acc).toFixed(2) }}%</span>
-                                        <span class="csBoardFc">{{ entry.is_fc ? "FC" : "" }}</span>
-                                        <span class="csBoardRks">{{ Number(entry.rks).toFixed(2) }}</span>
-                                        <span class="csBoardDate">{{ boardDate(entry.run_at) }}</span>
+                                        {{ diff.level }}
+                                    </span>
+                                    <span class="csDiffText">
+                                        Lv.{{ ratingText(diff) }}
+                                        <template v-if="diff.charter">
+                                            · {{ $t("chartManage.charter", [diff.charter]) }}
+                                        </template>
+                                        <template v-if="diff.file && !diff.localChart">
+                                            · {{ formatSize(diff.file.size) }}
+                                        </template>
+                                        <template v-if="diff.outdated">
+                                            · {{ $t("chartManage.outdated") }}
+                                        </template>
+                                        <template v-if="diff.file && diff.file.valid === false">
+                                            · {{ diff.file.error }}
+                                        </template>
+                                        <template v-if="bestScoreOf(diff.localChart)">
+                                            · {{ scoreBadge(bestScoreOf(diff.localChart)) }}
+                                            {{
+                                                String(bestScoreOf(diff.localChart).score).padStart(
+                                                    7,
+                                                    "0"
+                                                )
+                                            }}
+                                            ({{
+                                                (bestScoreOf(diff.localChart).acc * 100).toFixed(2)
+                                            }}%)
+                                        </template>
+                                    </span>
+                                </div>
+                                <div class="csDiffActions">
+                                    <template v-if="diffState(diff).kind === 'busy'">
+                                        <div class="csProgressWrap">
+                                            <div class="csProgressBar">
+                                                <div
+                                                    class="csProgressFill"
+                                                    :style="{
+                                                        width:
+                                                            (diffState(diff).item.progress || 0) +
+                                                            '%',
+                                                    }"
+                                                ></div>
+                                            </div>
+                                            <span class="csProgressText">
+                                                {{
+                                                    diffState(diff).item.status === "importing"
+                                                        ? $t("chartManage.importing")
+                                                        : (diffState(diff).item.progress || 0) + "%"
+                                                }}
+                                            </span>
+                                        </div>
+                                    </template>
+                                    <template v-else-if="diffState(diff).kind === 'queued'">
+                                        <span class="csTag">{{ $t("chartManage.tagQueued") }}</span>
+                                    </template>
+                                    <template v-else-if="diffState(diff).kind === 'failed'">
+                                        <span class="csFailedText">
+                                            {{
+                                                diffState(diff).item.error ||
+                                                $t("chartManage.downloadFailed")
+                                            }}
+                                        </span>
+                                        <input
+                                            type="button"
+                                            :value="$t('chartManage.retry')"
+                                            @click="retryItem(diff)"
+                                        />
+                                    </template>
+                                    <template v-else-if="diffState(diff).kind === 'broken'">
+                                        <span class="csTag csTagBroken" :title="diff.file.error">
+                                            {{ $t("chartManage.tagBroken") }}
+                                        </span>
+                                    </template>
+                                    <template v-else-if="diffState(diff).kind === 'done'">
+                                        <input
+                                            type="button"
+                                            class="csPlayBtn"
+                                            :value="$t('chartSelect.play')"
+                                            @click="playDiff(group, diff)"
+                                        />
+                                        <input
+                                            v-if="diff.file && diff.outdated"
+                                            type="button"
+                                            :value="$t('chartManage.update')"
+                                            @click="updateDiff(diff)"
+                                        />
+                                        <input
+                                            type="button"
+                                            :value="$t('chartManage.delete')"
+                                            @click="deleteDiff(group, diff)"
+                                        />
+                                    </template>
+                                    <template v-else>
+                                        <input
+                                            v-if="diff.file"
+                                            type="button"
+                                            :value="
+                                                diff.link
+                                                    ? $t('chartManage.redownload')
+                                                    : $t('chartManage.download')
+                                            "
+                                            @click="downloadDiff(diff)"
+                                        />
+                                    </template>
+                                    <input
+                                        v-if="canBoard && chartIdOf(diff)"
+                                        type="button"
+                                        class="csBoardBtn"
+                                        :value="
+                                            boardKey === diff.key
+                                                ? $t('chartSelect.board.close')
+                                                : $t('chartSelect.board.open')
+                                        "
+                                        @click="toggleBoard(diff)"
+                                    />
+                                </div>
+                            </div>
+                            <div v-if="boardKey === diff.key" class="csBoard">
+                                <template v-if="boards[diff.key]">
+                                    <div v-if="boards[diff.key].loading" class="csBoardNote">
+                                        {{ $t("chartSelect.board.loading") }}
                                     </div>
-                                    <div v-if="boards[diff.key].me" class="csBoardMeRow">
-                                        {{ $t("chartSelect.board.myRank", [boards[diff.key].me.rank]) }}
-                                        · {{ String(boards[diff.key].me.score).padStart(7, "0") }}
-                                        · {{ Number(boards[diff.key].me.acc).toFixed(2) }}%
+                                    <div
+                                        v-else-if="boards[diff.key].error"
+                                        class="csBoardNote csBoardError"
+                                    >
+                                        {{ boards[diff.key].error }}
                                     </div>
+                                    <div
+                                        v-else-if="!boards[diff.key].entries.length"
+                                        class="csBoardNote"
+                                    >
+                                        {{ $t("chartSelect.board.empty") }}
+                                    </div>
+                                    <template v-else>
+                                        <div
+                                            v-for="entry in boards[diff.key].entries"
+                                            :key="entry.user_id"
+                                            class="csBoardRow"
+                                            :class="{ csBoardMe: entry.is_me }"
+                                        >
+                                            <span class="csBoardRank">#{{ entry.rank }}</span>
+                                            <span class="csBoardName">{{ entry.name }}</span>
+                                            <span class="csBoardScore">
+                                                {{ String(entry.score).padStart(7, "0") }}
+                                            </span>
+                                            <span class="csBoardAcc">
+                                                {{ Number(entry.acc).toFixed(2) }}%
+                                            </span>
+                                            <span class="csBoardFc">
+                                                {{ entry.is_fc ? "FC" : "" }}
+                                            </span>
+                                            <span class="csBoardRks">
+                                                {{ Number(entry.rks).toFixed(2) }}
+                                            </span>
+                                            <span class="csBoardDate">
+                                                {{ boardDate(entry.run_at) }}
+                                            </span>
+                                        </div>
+                                        <div v-if="boards[diff.key].me" class="csBoardMeRow">
+                                            {{
+                                                $t("chartSelect.board.myRank", [
+                                                    boards[diff.key].me.rank,
+                                                ])
+                                            }}
+                                            ·
+                                            {{
+                                                String(boards[diff.key].me.score).padStart(7, "0")
+                                            }}
+                                            · {{ Number(boards[diff.key].me.acc).toFixed(2) }}%
+                                        </div>
+                                    </template>
                                 </template>
-                            </template>
-                        </div>
+                            </div>
                         </div>
                         <div class="csDetailFoot">
                             <input
                                 type="button"
-                                :value="isFavourite(group) ? $t('chartSelect.favourites.remove') : $t('chartSelect.favourites.add')"
+                                :value="
+                                    isFavourite(group)
+                                        ? $t('chartSelect.favourites.remove')
+                                        : $t('chartSelect.favourites.add')
+                                "
                                 @click="toggleFavourite(group)"
                             />
                             <input
@@ -927,6 +1253,12 @@
 
 <style>
     #chartSelectNew {
+        height: calc(100vh - 170px);
+        height: calc(100dvh - 170px);
+        overflow-y: auto;
+        overscroll-behavior-y: contain;
+        touch-action: pan-x pan-y;
+        -webkit-overflow-scrolling: touch;
         width: 92%;
         margin: 0 auto;
         padding-bottom: 30px;
@@ -984,6 +1316,13 @@
         gap: 5px;
         font-size: 0.88em;
         color: #000000bb;
+    }
+
+    #chartSelectNew .csSettingItem input[type="checkbox"] {
+        display: inline-block;
+        width: 1em;
+        height: 1em;
+        accent-color: #0066ff;
     }
 
     #chartSelectNew .csNotice {

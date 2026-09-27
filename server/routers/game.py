@@ -283,6 +283,7 @@ def collect_chart_entries() -> list[dict]:
                 "rating": float(chart.get("rating") or 0),
                 "chart_id": _lib_chart_id(chart_file),
                 "cover": f"/api/game/covers/{song_id}" if cover.is_file() else None,
+                "cover_version": f"{cover.stat().st_mtime_ns}:{cover.stat().st_size}" if cover.is_file() else "",
                 "chapter": meta.get("chapter", ""),
                 "chapter_order": meta.get("chapter_order", 999),
             })

@@ -3,7 +3,8 @@
 // targets the local server (see server/routers/game.py) instead of PhiZone.
 import ptdb from "@components/ptdb";
 import shared from "@utils/js/shared";
-import { authFetch, currentUser, isLoggedIn, moduleApi, moduleProfile } from "./serverApi";
+import { mergeRecord, playerRks, addRun, acknowledge } from "./offlineRecords.mjs";
+import { authFetch, currentUser, isLoggedIn, moduleApi } from "./serverApi";
 
 export interface PtRecordInput {
     chart_id: string;
@@ -63,6 +64,8 @@ export interface PtMyStats {
         is_fc: number;
         chart_rks: number;
         updated_at: string;
+        best_acc?: number;
+        run_at?: string;
     }>;
     rks: number;
     limit: number;
@@ -144,7 +147,9 @@ export async function fetchChartLeaderboard(chartId: string): Promise<ChartLeade
         const api = moduleApi();
         if (api && api.game) {
             // 网关与独立版同形状（entries + me），直通即可。
-            return (await api.game.call("game.chart-leaderboard", { chartId })) as ChartLeaderboardData;
+            return (await api.game.call("game.chart-leaderboard", {
+                chartId,
+            })) as ChartLeaderboardData;
         }
         const resp = await authFetch(
             `/api/game/pt/chart-leaderboard?chart_id=${encodeURIComponent(chartId)}`
@@ -170,175 +175,184 @@ export async function fetchMyStats(): Promise<PtMyStats | null> {
     }
 }
 
-/**
- * Pull the server-side rks and sync it onto the player info bar
- * (gameConfig.account.userBasicInfo.rks, read by #pzrks in the top bar).
- * Returns the fresh rks, or null when unavailable.
- * 模块模式：统计随 game.profile 一起取（不走 HTTP 排行接口）。
- */
-export async function refreshLocalPlayerRks(): Promise<number | null> {
-    let rks: number | null = null;
-    const p = platform();
-    if (p) {
-        const profile = await moduleProfile();
-        const stats = profile && (profile.stats || profile);
-        const value = stats && (stats.rks ?? stats.RKS);
-        if (typeof value === "number") rks = value;
-    } else {
-        const stats = await fetchMyStats();
-        if (stats !== null) rks = stats.rks;
-    }
-    if (rks === null) return null;
-    try {
-        const info = shared.game?.ptmain?.gameConfig?.account?.userBasicInfo;
-        if (info) info.rks = rks;
-    } catch {
-        /* sub-app not mounted: nothing to sync */
-    }
-    return rks;
+/** The module host isolates its storage; standalone accounts need explicit namespaces. */
+export function recordOwner(): string {
+    if (moduleApi()) return available() ? "module" : "module-guest";
+    const user = currentUser();
+    return user ? `user:${user.id}` : "guest";
+}
+const stateKey = (owner: string) => `ptRecords:v2:${owner}`;
+const inflight = new Map<string, Promise<boolean>>();
+const migrating = new Map<string, Promise<void>>();
+
+async function readState(owner: string): Promise<any> {
+    await migrateLegacy(owner);
+    return await ptdb.gameConfig.get(stateKey(owner)).catch(() => ({ records: {}, pending: {} }));
 }
 
-// ===== Offline score queue =====
-// Pending uploads live in the ptdb userData store (id=pendingPtUploads); one
-// merged best value per chart (same merge rule as the server). Flush triggers:
-// a finished play, the browser `online` event, or re-entering the game.
-const PENDING_UPLOADS_ID = "pendingPtUploads";
-let flushing = false;
-
-async function loadPending(): Promise<Record<string, PtRecordInput>> {
-    try {
-        const saved = await ptdb.gameConfig.get(PENDING_UPLOADS_ID, {});
-        return (saved as Record<string, PtRecordInput>) || {};
-    } catch {
-        return {};
-    }
-}
-
-/**
- * 单谱面最佳单局合并（与服务端榜单同键：(score, acc, is_fc) 字典序最大的一局胜出），
- * max_acc 取历史最高：并发/重试时旧响应既不能删掉新成绩，也不能降低最佳值。
- */
-function mergeRecord(prev: PtRecordInput | undefined, rec: PtRecordInput): PtRecordInput {
-    if (!prev) return rec;
-    const score = (r: PtRecordInput) => Number(r.score) || 0;
-    const acc = (r: PtRecordInput) => Number(r.acc) || 0;
-    const better =
-        score(prev) !== score(rec)
-            ? score(prev) > score(rec)
-            : acc(prev) !== acc(rec)
-              ? acc(prev) > acc(rec)
-              : !!prev.is_fc && !rec.is_fc;
-    const best = better ? prev : rec;
-    return {
-        ...best,
-        max_acc: Math.max(Number(prev.max_acc ?? prev.acc) || 0, Number(rec.max_acc ?? rec.acc) || 0),
-    };
-}
-
-/** 本地成绩合并：ptBestRecords 里每谱面一行 [score, acc, isFc, maxAcc, runAt]。 */
-function mergeBestTuples(a: any, b: any): any {
-    if (!a) return b;
-    if (!b) return a;
-    const better =
-        (Number(a[0]) || 0) !== (Number(b[0]) || 0)
-            ? (Number(a[0]) || 0) > (Number(b[0]) || 0)
-            : (Number(a[1]) || 0) !== (Number(b[1]) || 0)
-              ? (Number(a[1]) || 0) > (Number(b[1]) || 0)
-              : !!a[2] && !b[2];
-    const best = better ? a : b;
-    return [best[0], best[1], best[2], Math.max(Number(a[3]) || 0, Number(b[3]) || 0), best[4]];
-}
-
-/**
- * Queue one record and try to flush at once.
- * @param localGameConfig 本次游玩的 gameConfig 快照（含 ptBestRecords）：本地成绩与
- *   pendingPtUploads 必须在同一个原子批里提交（模块模式同一个 api.records.batch），
- *   分开写会互相覆盖。
- */
-export async function queueRecord(rec: PtRecordInput, localGameConfig?: any): Promise<boolean> {
-    if (!available()) return false;
-    const chartId = String(rec.chart_id);
-    try {
-        const mergePending = (cur: any) => {
-            const map = { ...(cur || {}) };
-            map[chartId] = mergeRecord(map[chartId], rec);
-            return map;
-        };
-        if (localGameConfig) {
-            await ptdb.gameConfig.updateBatch([
-                {
-                    id: "gameConfig",
-                    mutator: (cur: any) => {
-                        // 以存储里的最新配置为基底（不覆盖并发改动），只按最佳值合并成绩；
-                        // 存储里还没有配置行时用本次快照兜底，避免写出残缺行
-                        const base =
-                            cur && typeof cur === "object"
-                                ? { ...cur }
-                                : { ...(localGameConfig || {}) };
-                        const curBest = (cur && cur.ptBestRecords) || {};
-                        const newBest = (localGameConfig && localGameConfig.ptBestRecords) || {};
-                        const merged: any = { ...curBest };
-                        for (const id of Object.keys(newBest))
-                            merged[id] = mergeBestTuples(curBest[id], newBest[id]);
-                        base.ptBestRecords = merged;
-                        return base;
-                    },
-                },
-                { id: PENDING_UPLOADS_ID, mutator: mergePending },
-            ]);
-        } else {
-            await ptdb.gameConfig.update(PENDING_UPLOADS_ID, mergePending);
+/** Preserve old records. Only claim an unscoped upload queue when its stored owner is known. */
+function migrateLegacy(owner: string): Promise<void> {
+    if (migrating.has(owner)) return migrating.get(owner)!;
+    const task = (async () => {
+        const existing: any = await ptdb.gameConfig.get(stateKey(owner)).catch(() => null);
+        if (existing) return;
+        const config: any = await ptdb.gameConfig.get("gameConfig").catch(() => ({}));
+        const storedId = config?.account?.userBasicInfo?.id;
+        const matches =
+            owner === "module" ||
+            (owner === "guest" ? !config?.account?.userBasicInfo : owner === `user:${storedId}`);
+        const legacyPending: any =
+            matches && owner !== "guest"
+                ? await ptdb.gameConfig.get("pendingPtUploads").catch(() => ({}))
+                : {};
+        const records: any = { ...legacyPending };
+        if (matches) {
+            // Old tuples lack ratings. Resolve them from downloaded chart metadata where possible.
+            const charts: any = await ptdb.chart.renderApi().catch(() => ({ results: [] }));
+            const meta = new Map<string, any>();
+            for (const song of charts.results || [])
+                for (const chart of song.charts || [])
+                    meta.set(String(chart.id), { ...chart, song_name: song.name });
+            for (const [id, tuple] of Object.entries(config?.ptBestRecords || {}) as any) {
+                const chart = meta.get(id);
+                const rec = {
+                    chart_id: id,
+                    song_name: chart?.song_name || "",
+                    difficulty: chart?.level || "",
+                    rating: Number(chart?.difficulty) || 0,
+                    score: Number(tuple[0]) || 0,
+                    acc: (Number(tuple[1]) || 0) * 100,
+                    is_fc: !!tuple[2],
+                    max_acc:
+                        (typeof tuple[3] === "number" ? tuple[3] : Number(tuple[1]) || 0) * 100,
+                    run_at: typeof tuple[4] === "string" ? tuple[4] : undefined,
+                };
+                records[id] = mergeRecord(rec, records[id] || rec);
+            }
         }
-    } catch {
-        /* 队列写失败仍允许直接尝试上传 */
-    }
-    return flushPending();
+        await ptdb.gameConfig.updateBatch([
+            {
+                id: stateKey(owner),
+                mutator: (cur: any) => cur || { records, pending: legacyPending },
+            },
+            // Keep ambiguous legacy data untouched, rather than upload under an arbitrary login.
+            ...(matches && owner !== "guest"
+                ? [{ id: "pendingPtUploads", mutator: () => ({}) }]
+                : []),
+        ]);
+    })().catch(error => {
+        migrating.delete(owner);
+        throw error;
+    });
+    migrating.set(owner, task);
+    return task;
 }
 
-/** Upload the queue in order; stop on the first failure (offline). */
-export async function flushPending(): Promise<boolean> {
-    if (!available()) return false;
-    if (flushing) return false;
-    flushing = true;
-    try {
+function displayState(owner: string, state: any) {
+    if (owner !== recordOwner()) return;
+    const config = shared.game?.ptmain?.gameConfig;
+    if (!config) return;
+    const records = state?.records || {};
+    config.ptBestRecords = Object.fromEntries(
+        Object.entries(records).map(([id, r]: [string, any]) => [
+            id,
+            [r.score, r.acc / 100, r.is_fc, (r.max_acc ?? r.acc) / 100, r.run_at],
+        ])
+    );
+    config.localRks = playerRks(records);
+    config.pendingScoreCount = Object.keys(state?.pending || {}).length;
+    config.scoreBaselineKnown = !!state?.syncedAt || owner.endsWith("guest");
+    if (config.account?.userBasicInfo) config.account.userBasicInfo.rks = config.localRks;
+}
+
+export async function activateLocalRecords() {
+    const owner = recordOwner();
+    const state = await readState(owner);
+    displayState(owner, state);
+    return state;
+}
+
+export async function refreshLocalPlayerRks(): Promise<number | null> {
+    const owner = recordOwner();
+    await activateLocalRecords(); // Always show the durable local value before a network request.
+    if (!available()) return null;
+    const stats = await fetchMyStats();
+    if (!stats || owner !== recordOwner()) return null;
+    const state = await ptdb.gameConfig.update(stateKey(owner), (cur: any) => {
+        const records = { ...cur?.records };
+        for (const row of stats.records || []) {
+            const rec = { ...row, is_fc: !!row.is_fc, max_acc: row.best_acc ?? row.acc };
+            // Server rating is authoritative even when the local best run wins.
+            records[row.chart_id] = {
+                ...mergeRecord(records[row.chart_id], rec),
+                rating: row.rating,
+            };
+        }
+        return { ...cur, records, syncedAt: Date.now() };
+    });
+    displayState(owner, state);
+    return playerRks(state.records);
+}
+
+/** Durable local-first write: guest scores remain local; account scores share one atomic outbox. */
+export async function queueRecord(rec: PtRecordInput, owner = recordOwner()): Promise<boolean> {
+    await readState(owner);
+    const signedIn = !owner.endsWith("guest");
+    const state = await ptdb.gameConfig.update(stateKey(owner), (cur: any) =>
+        addRun(cur, rec, signedIn)
+    );
+    displayState(owner, state);
+    // Caller need not wait for the server to finish the result screen.
+    return signedIn;
+}
+
+export function flushPending(): Promise<boolean> {
+    if (!available()) return Promise.resolve(false);
+    const owner = recordOwner();
+    if (inflight.has(owner)) return inflight.get(owner)!;
+    const task = (async () => {
         for (;;) {
-            const map = await loadPending();
-            const id = Object.keys(map)[0];
-            if (!id) return true;
-            const rec = map[id];
+            const state = await readState(owner);
+            if (owner !== recordOwner() || !available()) return false;
+            const rec: any = Object.values(state?.pending || {})[0];
+            if (!rec) {
+                displayState(owner, state);
+                return true;
+            }
             const ok = await uploadRecord(rec);
             if (!ok) return false;
-            // 只移除「本次刚上传的那条」。上传期间若同谱面又进来了新成绩（或更好的
-            // 值），保留合并结果并留给下一轮上传——旧响应不能删掉新成绩。
-            await ptdb.gameConfig.update(PENDING_UPLOADS_ID, (cur: any) => {
-                const next = { ...(cur || {}) };
-                const now = next[id];
-                if (!now) return next;
-                const unchanged =
-                    String(now.chart_id ?? id) === String(rec.chart_id ?? id) &&
-                    Number(now.score) === Number(rec.score) &&
-                    Number(now.acc) === Number(rec.acc) &&
-                    !!now.is_fc === !!rec.is_fc &&
-                    Number(now.max_acc ?? now.acc) === Number(rec.max_acc ?? rec.acc);
-                if (unchanged) delete next[id];
-                else next[id] = mergeRecord(rec, now);
-                return next;
-            });
+            const updated = await ptdb.gameConfig.update(stateKey(owner), (cur: any) =>
+                acknowledge(cur, rec)
+            );
+            displayState(owner, updated);
         }
-    } finally {
-        flushing = false;
-    }
+    })()
+        .catch(() => false)
+        .finally(() => inflight.delete(owner));
+    inflight.set(owner, task);
+    return task;
 }
 
-/** Aggregated entry point for untyped callers (global.js). */
+export async function syncPending() {
+    const owner = recordOwner();
+    if (await flushPending()) {
+        if (owner === recordOwner()) await refreshLocalPlayerRks().catch(() => null);
+        return true;
+    }
+    return false;
+}
+
 export const ptServer = {
     playerName,
     available,
     uploadRecord,
     queueRecord,
     flushPending,
+    syncPending,
     fetchLeaderboard,
     fetchChartLeaderboard,
     fetchMyStats,
     refreshLocalPlayerRks,
+    activateLocalRecords,
+    recordOwner,
 };

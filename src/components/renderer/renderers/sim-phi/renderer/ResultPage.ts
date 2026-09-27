@@ -291,7 +291,9 @@ export function resultPageRenderer(statData) {
     // 本曲排名 / 待上传提示（playFinished 上传后异步填入，到了自动出现）
     const ptRank = (shared.game as any)?.ptRank as { text: string; color: string } | null;
     if (ptRank && ptRank.text) {
-        simphiPlayer.app.ctxos.globalAlpha = clip((simphiPlayer.animationTimer.end.second - 0.8) * 1.5);
+        simphiPlayer.app.ctxos.globalAlpha = clip(
+            (simphiPlayer.animationTimer.end.second - 0.8) * 1.5
+        );
         simphiPlayer.app.ctxos.fillStyle = ptRank.color;
         simphiPlayer.app.ctxos.textAlign = "left";
         simphiPlayer.app.ctxos.font = `30px Saira`;
@@ -299,6 +301,20 @@ export function resultPageRenderer(statData) {
             ptRank.text,
             -1920 * tween.ease10(clip(simphiPlayer.animationTimer.end.second * 1)) + 2050,
             880
+        );
+    }
+    const localConfig = (shared.game as any)?.ptmain?.gameConfig;
+    if (localConfig && typeof localConfig.localRks === "number") {
+        simphiPlayer.app.ctxos.globalAlpha = clip(
+            (simphiPlayer.animationTimer.end.second - 0.8) * 1.5
+        );
+        simphiPlayer.app.ctxos.fillStyle = "#a2e27f";
+        simphiPlayer.app.ctxos.textAlign = "left";
+        simphiPlayer.app.ctxos.font = "28px Saira";
+        simphiPlayer.app.ctxos.fillText(
+            `RKS ${localConfig.localRks.toFixed(3)}`,
+            -1920 * tween.ease10(clip(simphiPlayer.animationTimer.end.second)) + 2050,
+            920
         );
     }
     // 控制按钮

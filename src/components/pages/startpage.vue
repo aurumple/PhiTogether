@@ -2,6 +2,7 @@
     import shared from "@utils/js/shared";
     import { partyMgr } from "@utils/js/partyMgr";
     import ploading from "@utils/js/ploading.js";
+    import { moduleApi } from "@utils/serverApi";
     import { refreshLocalPlayerRks } from "../../utils/ptServer";
     export default {
         name: "startPage",
@@ -12,6 +13,12 @@
             };
         },
         computed: {
+            isModule() {
+                return !!moduleApi();
+            },
+            localScores() {
+                return shared.game.ptmain.gameConfig;
+            },
             loginInfo() {
                 return shared.game.ptmain.gameConfig.account.userBasicInfo;
             },
@@ -47,14 +54,14 @@
         async activated() {
             // 自建服务端模式：从服务端拉取本地 rks（best30 均值）用于玩家卡展示，
             // 并同步顶栏玩家信息条（userBasicInfo.rks，此前后续游玩不更新）
-            if (this.loginStatus) this.refreshLocalRks();
+            this.refreshLocalRks();
         },
         methods: {
             forcedFullscreen() {
                 shared.game.requestFullscreen(true);
             },
             async refreshLocalRks() {
-                await refreshLocalPlayerRks();
+                await refreshLocalPlayerRks().catch(console.error);
             },
             toLocalLeaderboard() {
                 this.to("/ptLeaderboard");
@@ -99,12 +106,8 @@
             async singleGame() {
                 if (this.checkIfCantPlay()) return;
                 shared.game.ptmain.gameMode = "single";
-                // 离线时只看本地缓存；在线时展示服务端曲库（下载/游玩统一入口）
-                this.to(
-                    navigator.onLine
-                        ? { path: "/chartSelect" }
-                        : { path: "/chartSelect", query: { offline: 1 } }
-                );
+                // 始终进入完整曲库视图，断网时使用持久缓存。
+                this.to({ path: "/chartSelect" });
             },
             async multiGame() {
                 if (this.checkIfCantPlay()) return;
@@ -172,14 +175,16 @@
                 <div id="playerCard" class="blur">
                     <div v-if="loginInfo" style="margin-bottom: 20px">
                         <div id="playerCardActions">
-                            <span v-if="loginStatus" @click="toLocalLeaderboard()">
+                            <span v-if="isModule || loginStatus" @click="toLocalLeaderboard()">
                                 {{ $t("startPage.localLeaderboard") }}
                             </span>
                             <span @click="reLogin()" v-else>{{ $t("startPage.retryLogin") }}</span>
-                            &nbsp;&nbsp;
-                            <span @click="logIn()">{{ $t("startPage.switch") }}</span>
-                            &nbsp;&nbsp;
-                            <span @click="logOut()">{{ $t("startPage.logout") }}</span>
+                            <template v-if="!isModule">
+                                &nbsp;&nbsp;
+                                <span @click="logIn()">{{ $t("startPage.switch") }}</span>
+                                &nbsp;&nbsp;
+                                <span @click="logOut()">{{ $t("startPage.logout") }}</span>
+                            </template>
                         </div>
                         <div id="playerCardUsrAvatarParent" style="padding-top: 10px">
                             <div
@@ -205,6 +210,16 @@
                             <br />
                             RKS
                             <b>{{ loginInfo.rks.toFixed(3) }}</b>
+                            <small v-if="localScores.pendingScoreCount">
+                                {{
+                                    $t("chartSelect.offline.pending", [
+                                        localScores.pendingScoreCount,
+                                    ])
+                                }}
+                            </small>
+                            <small v-else-if="!localScores.scoreBaselineKnown">
+                                {{ $t("chartSelect.offline.localEstimate") }}
+                            </small>
                             <br />
                             <br />
                             {{ $t("startPage.lastLogin") }}
@@ -213,9 +228,14 @@
                         </div>
                         <br />
                     </div>
-                    <div v-else @click="logIn()" style="margin-bottom: 20px">
+                    <div v-else style="margin-bottom: 20px">
                         <div id="playerCardActions">
-                            <span @click="logIn()">{{ $t("startPage.login") }}</span>
+                            <span v-if="!isModule" @click="logIn()">
+                                {{ $t("startPage.login") }}
+                            </span>
+                            <span v-else @click="toLocalLeaderboard()">
+                                {{ $t("startPage.localLeaderboard") }}
+                            </span>
                             &nbsp;&nbsp;
                         </div>
                         <div id="playerCardUsrAvatarParent">
@@ -237,7 +257,8 @@
                             <b>--</b>
                             <br />
                             RKS
-                            <b>--.---</b>
+                            <b>{{ Number(localScores.localRks || 0).toFixed(3) }}</b>
+                            <small>{{ $t("chartSelect.offline.guestScore") }}</small>
                             <br />
                             <br />
                             {{ $t("startPage.lastLogin") }}

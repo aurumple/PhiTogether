@@ -130,6 +130,20 @@
         "title": "Changelogs"
     },
     "chartSelect": {
+        "offline": {
+            "downloaded": "Downloaded",
+            "empty": "No downloaded charts yet. Download from another chapter or import local charts.",
+            "clear": "Clear library information and thumbnails",
+            "clearConfirm": "Clear library information and list thumbnails only? Downloaded charts, favorites and scores are kept. Use Refresh to cache the library again.",
+            "progress": "Cached icons: {0}/{1}",
+            "retryCovers": "Unfinished icons will retry when connected and idle.",
+            "storageFailed": "Could not save the library cache. Check available storage.",
+            "pending": "{0} charts pending sync",
+            "localEstimate": "Local estimate; server scores have not been synced",
+            "guestScore": "Guest local scores",
+            "scoreSaveFailed": "Could not save this score. Check local storage space.",
+            "connectToDownload": "Offline. Connect to download."
+        },
         "play": "Play",
         "board": {
             "open": "Top 10",
@@ -636,7 +650,7 @@
         "filterLocal": "Local imports",
         "pausedNotice": "Downloads pause while playing and resume afterwards.",
         "downloadingNotice": "Downloading {0} chart package(s)…",
-        "serverUnreachable": "Server unreachable ({0}) — showing local charts only.",
+        "serverUnreachable": "Server unavailable ({0}). Showing the cached library; downloaded charts remain playable.",
         "retry": "Retry",
         "loadingLocal": "Loading local charts…",
         "empty": "No charts yet. Click \"Download all\" to fetch them from the server, or drop .pez/.zip files into the server's data/charts/ directory and refresh.",
