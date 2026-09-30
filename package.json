@@ -12,7 +12,7 @@
     "preview": "vite preview",
     "pret": "prettier --check .",
     "pret:fix": "prettier --write .",
-    "build:onetap": "node onetap/build.mjs"
+    "build:onetap": "node script/check-method-scope.mjs && node onetap/build.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^6.2.0",

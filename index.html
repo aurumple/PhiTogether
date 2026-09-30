@@ -80,7 +80,8 @@
                     style="z-index: -2"
                 ></canvas>
                 <h1 class="title blur" id="ptTitle">
-                    <span style="margin-left: 12px">
+                    <!-- 左偏移 52px：宿主悬浮返回按钮（56px）拖到左上角时不压住这个箭头 -->
+                    <span style="margin-left: 52px">
                         <Transition name="sameSlide-fade">
                             <img
                                 src="/src/core/icons/return.svg"

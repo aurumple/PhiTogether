@@ -161,7 +161,8 @@
             "pendingUpload": "Score saved locally; will upload when online"
         },
         "chapters": {
-            "favorites": "Favorites"
+            "favorites": "Favorites",
+            "other": "Other"
         },
         "jumpto": "Insert your destination page (1 - {0})",
         "inputDosentMatchRequirement": "Invalid input",
@@ -179,9 +180,12 @@
             "local": "Local",
             "favourites": "Fav-ed"
         },
-        "search": "Search by name",
+        "search": "Search all chapters",
         "import": "Import",
         "chartListIsEmpty": "No charts available",
+        "searchJump": "Open that chapter",
+        "searchEmpty": "No chart matches this search",
+        "searchHit": "{0} hit(s) across all chapters",
         "pageCount": "Page {page} / {pageAll} in all",
         "playConfig": {
             "mirror": "Mirror",

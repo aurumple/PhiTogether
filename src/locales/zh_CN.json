@@ -161,7 +161,8 @@
             "pendingUpload": "成绩已本地保存，联网后上传"
         },
         "chapters": {
-            "favorites": "收藏"
+            "favorites": "收藏",
+            "other": "其他"
         },
         "jumpto": "请输入您要跳转的页码 (1 - {0})",
         "inputDosentMatchRequirement": "您的输入不合法",
@@ -179,9 +180,12 @@
             "local": "本地谱面",
             "favourites": "收藏谱面"
         },
-        "search": "搜索曲名",
+        "search": "搜索曲名（全部章节）",
         "import": "导入",
         "chartListIsEmpty": "谱面列表为空",
+        "searchJump": "进入该章节",
+        "searchEmpty": "没有找到匹配的谱面",
+        "searchHit": "全部章节命中 {0} 首",
         "pageCount": "第{page}页 共{pageAll}页",
         "playConfig": {
             "mirror": "谱面镜像",

@@ -28,6 +28,14 @@
         SP: "#7a8288",
     };
 
+    // 章节条顺序：正版 Phigros 把「单曲精选集」紧挨在「过去的章节」右边，服务端章节表却
+    // 把它排在最后一位（order 33）。这里按章节 id（名字兜底）做一次本地置顶，其余章节保持
+    // 服务端顺序——147 首的单曲精选集不该翻到章节条最末尾才找得到。
+    const CHAPTER_PINNED = [
+        { id: "legacy", name: "Chapter Legacy 过去的章节" },
+        { id: "single", name: "单曲精选集" },
+    ];
+
     export default {
         name: "chartSelect",
         data() {
@@ -198,15 +206,28 @@
                         name: this.$t("chartSelect.chapters.favorites"),
                         groups: favGroups,
                     });
+                const chapterItems = [];
                 for (const chapter of this.chapters) {
                     const groups = byChapter.get(chapter.name) || [];
                     if (!groups.length && !fixed.includes(chapter.name)) continue;
-                    items.push({
+                    chapterItems.push({
                         id: chapter.id || chapter.name,
                         name: chapter.name,
                         groups: groups.slice().sort((a, b) => a.name.localeCompare(b.name, "zh")),
                     });
                 }
+                // 置顶章节排在最前，其余保持服务端顺序（排序键里带上原索引，排序必须稳定）。
+                const serverOrder = new Map(chapterItems.map((item, index) => [item, index]));
+                const pinOf = item => {
+                    const index = CHAPTER_PINNED.findIndex(
+                        pin => pin.id === item.id || pin.name === item.name
+                    );
+                    return index < 0 ? CHAPTER_PINNED.length : index;
+                };
+                chapterItems.sort(
+                    (a, b) => pinOf(a) - pinOf(b) || serverOrder.get(a) - serverOrder.get(b)
+                );
+                items.push(...chapterItems);
                 // 章节表之外的（手动 pez / 本地上传）统一归入「其他」
                 const known = new Set(this.chapters.map(c => c.name));
                 const rest = this.songGroups.filter(g => !known.has(g.chapter) && g.chapter !== "");
@@ -237,17 +258,59 @@
                     this.chapterItems[0]
                 );
             },
+            /** 归一化后的搜索词：非空即进入「全部章节」搜索模式。 */
+            searchQuery() {
+                return this.search.trim().toLowerCase();
+            },
+            searching() {
+                return !!this.searchQuery;
+            },
+            /**
+             * 全章节搜索：不再局限于当前章节，命中哪一章就显示哪一章。
+             * 章节条的「已下载 / 收藏」只是视图不是归属，所以直接扫全部歌曲分组。
+             */
+            searchResults() {
+                const query = this.searchQuery;
+                if (!query) return [];
+                return this.songGroups
+                    .filter(g =>
+                        [g.name, g.composer, g.illustrator]
+                            .join(" ")
+                            .toLowerCase()
+                            .includes(query)
+                    )
+                    .sort((a, b) => a.name.localeCompare(b.name, "zh"));
+            },
             visibleSongs() {
-                const chapter = this.currentChapter;
-                if (!chapter) return [];
-                let list = chapter.groups;
-                const query = this.search.trim().toLowerCase();
-                if (query) {
-                    list = list.filter(g =>
-                        [g.name, g.composer, g.illustrator].join(" ").toLowerCase().includes(query)
-                    );
+                // 搜索覆盖全部章节：结果行自带章节标签，点标签即可跳进该章节。
+                if (this.searching) return this.searchResults;
+                return this.currentChapter ? this.currentChapter.groups : [];
+            },
+            /** group.key → 所属章节条目：搜索结果的章节标注与跳转都查这一张表。 */
+            chapterOfGroup() {
+                const map = new Map();
+                for (const item of this.chapterItems) {
+                    // 「已下载 / 收藏」里的分组是副本，只作视图，不作归属。
+                    if (item.id === "__downloaded__" || item.id === "__fav__") continue;
+                    for (const group of item.groups) map.set(group.key, item);
                 }
-                return list;
+                return map;
+            },
+            /**
+             * 当前展开的单谱榜状态：字段一律归一化后再交给模板。
+             * 模板只读这一个对象，半个状态（例如只有 loading）也不会把整页渲染带崩。
+             */
+            openBoard() {
+                const board = this.boardKey ? this.boards[this.boardKey] : null;
+                if (!board) return null;
+                return {
+                    loading: !!board.loading,
+                    entries: Array.isArray(board.entries) ? board.entries : [],
+                    me: board.me || null,
+                    stale: !!board.stale,
+                    at: Number(board.at) || 0,
+                    error: board.error || "",
+                };
             },
             canBoard() {
                 // 榜单按钮与网络状态无关：离线时看的是本地快照。
@@ -272,6 +335,10 @@
                     this.favouriteSongs.includes(group.key) ||
                     (!!group.localSongId && this.favouriteSongs.includes(group.localSongId))
                 );
+            },
+            selectChapter(id) {
+                this.selectedChapter = id;
+                this.search = ""; // 点章节条＝明确要浏览这一章，搜索状态一并退出
             },
             toggleFavourite(group) {
                 const on = this.isFavourite(group);
@@ -394,7 +461,10 @@
                 shared.game.ptmain.playChart();
             },
             bestScoreOf(chart) {
-                const records = shared.game.ptmain.gameConfig.ptBestRecords || {};
+                // 存档可能还没就绪（冷启动、换账号）：缺字段按「没有成绩」处理。
+                // 渲染期抛错会直接把整页打成白屏，这里必须防御到底。
+                const config = shared.game.ptmain.gameConfig;
+                const records = (config && config.ptBestRecords) || {};
                 const data = records[chart && chart.id];
                 if (!data) return null;
                 // [score, acc, isFc, maxAcc, runAt]：前三项是最佳单局（见 global.js）
@@ -484,7 +554,21 @@
             },
             /** 本机最佳单局（含还没上传的）：榜上查不到自己时，至少让玩家看到自己的成绩。 */
             boardMyBest(diff) {
-                return bestScoreOf(diff.localChart);
+                return this.bestScoreOf(diff.localChart);
+            },
+            /** 搜索结果行上的章节名：与章节条上的名字完全一致。 */
+            chapterLabel(group) {
+                const item = this.chapterOfGroup.get(group.key);
+                return (
+                    (item && item.name) || group.chapter || this.$t("chartSelect.chapters.other")
+                );
+            },
+            /** 从搜索结果直接跳进该曲所属章节，并退出搜索回到章节浏览。 */
+            openChapterOf(group) {
+                const item = this.chapterOfGroup.get(group.key);
+                if (!item) return;
+                this.selectedChapter = item.id;
+                this.search = "";
             },
             boardMyBestText(diff) {
                 const best = this.boardMyBest(diff);
@@ -910,8 +994,8 @@
                     v-for="chapter in chapterItems"
                     :key="chapter.id"
                     class="csChapter"
-                    :class="{ csChapterOn: currentChapter && currentChapter.id === chapter.id }"
-                    @click="selectedChapter = chapter.id"
+                    :class="{ csChapterOn: !searching && currentChapter?.id === chapter.id }"
+                    @click="selectChapter(chapter.id)"
                 >
                     <div
                         class="csChapterCover"
@@ -931,6 +1015,11 @@
                 </div>
             </div>
 
+            <!-- 搜索：跨全部章节命中 -->
+            <div v-if="searching" class="csNotice">
+                {{ $t("chartSelect.searchHit", [visibleSongs.length]) }}
+            </div>
+
             <!-- 歌曲列表 -->
             <div class="csList">
                 <div v-if="loading && !songGroups.length" class="csEmpty">
@@ -938,9 +1027,11 @@
                 </div>
                 <div v-else-if="!visibleSongs.length" class="csEmpty">
                     {{
-                        currentChapter?.id === "__downloaded__"
-                            ? $t("chartSelect.offline.empty")
-                            : $t("chartSelect.chartListIsEmpty")
+                        searching
+                            ? $t("chartSelect.searchEmpty")
+                            : currentChapter?.id === "__downloaded__"
+                              ? $t("chartSelect.offline.empty")
+                              : $t("chartSelect.chartListIsEmpty")
                     }}
                 </div>
 
@@ -982,6 +1073,14 @@
                                 </span>
                             </div>
                             <div class="csRowMeta">
+                                <span
+                                    v-if="searching"
+                                    class="csRowChapter"
+                                    :title="$t('chartSelect.searchJump')"
+                                    @click.stop="openChapterOf(group)"
+                                >
+                                    {{ chapterLabel(group) }}
+                                </span>
                                 {{ group.composer || $t("chartManage.unknownComposer") }}
                                 <template v-if="group.illustrator">
                                     × {{ group.illustrator }}
@@ -1205,39 +1304,39 @@
                                 </div>
                             </div>
                             <div v-if="boardKey === diff.key" class="csBoard">
-                                <template v-if="boards[diff.key]">
-                                    <div v-if="boards[diff.key].loading" class="csBoardNote">
+                                <template v-if="openBoard">
+                                    <div v-if="openBoard.loading" class="csBoardNote">
                                         {{ $t("chartSelect.board.loading") }}
                                     </div>
                                     <template v-else>
                                         <div
-                                            v-if="boards[diff.key].error"
+                                            v-if="openBoard.error"
                                             class="csBoardNote csBoardError"
                                         >
-                                            {{ boards[diff.key].error }}
+                                            {{ openBoard.error }}
                                         </div>
                                         <div
-                                            v-else-if="boards[diff.key].stale"
+                                            v-else-if="openBoard.stale"
                                             class="csBoardNote csBoardStale"
                                         >
                                             {{
                                                 $t("chartSelect.board.cachedAt", [
-                                                    boardTime(boards[diff.key].at),
+                                                    boardTime(openBoard.at),
                                                 ])
                                             }}
                                         </div>
                                         <div
                                             v-if="
-                                                !boards[diff.key].error &&
-                                                !boards[diff.key].entries.length
+                                                !openBoard.error &&
+                                                !openBoard.entries.length
                                             "
                                             class="csBoardNote"
                                         >
                                             {{ $t("chartSelect.board.empty") }}
                                         </div>
-                                        <template v-else-if="boards[diff.key].entries.length">
+                                        <template v-else-if="openBoard.entries.length">
                                             <div
-                                                v-for="entry in boards[diff.key].entries"
+                                                v-for="entry in openBoard.entries"
                                                 :key="entry.user_id"
                                                 class="csBoardRow"
                                                 :class="{ csBoardMe: entry.is_me }"
@@ -1260,21 +1359,18 @@
                                                     {{ boardDate(entry.run_at) }}
                                                 </span>
                                             </div>
-                                            <div v-if="boards[diff.key].me" class="csBoardMeRow">
+                                            <div v-if="openBoard.me" class="csBoardMeRow">
                                                 {{
                                                     $t("chartSelect.board.myRank", [
-                                                        boards[diff.key].me.rank,
+                                                        openBoard.me.rank,
                                                     ])
                                                 }}
                                                 ·
                                                 {{
-                                                    String(boards[diff.key].me.score).padStart(
-                                                        7,
-                                                        "0"
-                                                    )
+                                                    String(openBoard.me.score).padStart(7, "0")
                                                 }}
                                                 ·
-                                                {{ Number(boards[diff.key].me.acc).toFixed(2) }}%
+                                                {{ Number(openBoard.me.acc).toFixed(2) }}%
                                             </div>
                                         </template>
                                         <div v-if="boardMyBest(diff)" class="csBoardMeRow">
@@ -1555,6 +1651,21 @@
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+    }
+
+    /* 搜索结果里的章节标签：点一下直接跳进该章节 */
+    #chartSelectNew .csRowChapter {
+        display: inline-block;
+        margin-right: 6px;
+        padding: 0 7px;
+        border-radius: 999px;
+        background-color: #2b57931f;
+        color: #2b5793;
+        cursor: pointer;
+    }
+
+    #chartSelectNew .csRowChapter:active {
+        background-color: #2b579340;
     }
 
     /* ===== 难度徽章 ===== */
