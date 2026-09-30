@@ -240,8 +240,10 @@ const stateKey = (owner: string) => `ptRecords:v2:${owner}`;
 const boardsKey = (owner: string) => `ptBoards:v1:${owner}`;
 const leaderboardKey = (owner: string) => `ptLeaderboard:v1:${owner}`;
 const identityKey = (owner: string) => `ptIdentity:v1:${owner}`;
+const guestMergedKey = "ptMigration:v1:module-guest-merged";
 const inflight = new Map<string, Promise<boolean>>();
 const migrating = new Map<string, Promise<void>>();
+let guestMerged: Promise<void> | null = null;
 
 /** 单谱榜快照最多缓存多少张谱面（每张 ≤10 行；一条 records 值上限 256KiB）。 */
 const BOARD_CACHE_LIMIT = 60;
@@ -257,8 +259,53 @@ function memoryKey(owner: string, chartId: string) {
 }
 
 async function readState(owner: string): Promise<any> {
+    // 顺序要紧：先认领旧版无账号队列（它只在目标行不存在时才接管），再做 module-guest 救济。
     await migrateLegacy(owner);
+    await mergeModuleGuestRecords(owner);
     return await ptdb.gameConfig.get(stateKey(owner)).catch(() => ({ records: {}, pending: {} }));
+}
+
+/**
+ * 一次性救济：模块模式曾把「断网启动」当成游客，那时的成绩落进 `module-guest`
+ * 分区——界面上能看到（玩家卡显示本地 RKS），但 `signedIn=false` 让它从来不进
+ * 待上传队列，联网后 owner 换回 `module` 更是彻底看不见。
+ *
+ * 模块模式只有一个宿主绑定账号，所以这个分区里的成绩必定属于当前账号：并回
+ * `module` 并全部入队补传（服务端合并是幂等的，重复提交无害）。独立版的
+ * `guest` 分区不动——那里的游客成绩是另一回事。
+ */
+function mergeModuleGuestRecords(owner: string): Promise<void> {
+    if (owner !== "module") return Promise.resolve();
+    if (guestMerged) return guestMerged;
+    guestMerged = (async () => {
+        const marker: any = await ptdb.gameConfig.get(guestMergedKey).catch(() => null);
+        if (marker && marker.done) return;
+        const guest: any = await ptdb.gameConfig.get(stateKey("module-guest")).catch(() => null);
+        const rescued: any = guest?.records || {};
+        const count = Object.keys(rescued).length;
+        await ptdb.gameConfig.updateBatch([
+            {
+                id: stateKey("module"),
+                mutator: (cur: any) => {
+                    const state = cur || { records: {}, pending: {} };
+                    const records = { ...state.records };
+                    const pending = { ...state.pending };
+                    for (const [chartId, rec] of Object.entries(rescued)) {
+                        records[chartId] = mergeRecord(records[chartId], rec);
+                        pending[chartId] = records[chartId];
+                    }
+                    return { ...state, records, pending };
+                },
+            },
+            // 并完即清，避免下一轮重复入队；标记行保证只做一次。
+            { id: stateKey("module-guest"), mutator: () => null },
+            { id: guestMergedKey, mutator: () => ({ done: true, at: Date.now(), count }) },
+        ]);
+    })().catch(error => {
+        guestMerged = null; // 失败（存储满等）下次启动再试，不吞掉成绩
+        throw error;
+    });
+    return guestMerged;
 }
 
 /** Preserve old records. Only claim an unscoped upload queue when its stored owner is known. */

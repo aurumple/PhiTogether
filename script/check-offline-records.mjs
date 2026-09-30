@@ -161,6 +161,11 @@ assert.equal(playerRks(many), 25.5);
 
 // The same durable flow also works through the module gateway, including legacy queue migration.
 await backend.putUserData("pendingPtUploads", { legacy: { ...run, chart_id: "legacy" } });
+// 模块模式曾把断网启动当游客：那时的成绩落在 module-guest，既看不到也永远不会上传。
+await backend.putUserData("ptRecords:v2:module-guest", {
+    records: { rescued: { ...run, chart_id: "rescued", score: 930000, acc: 93, max_acc: 93 } },
+    pending: {},
+});
 moduleMode = true;
 online = false;
 const moduleUploads = [];
@@ -189,12 +194,19 @@ globalThis.window = {
 assert.equal(client.available(), true, "模块模式断网仍视为已绑定账号");
 assert.equal(client.recordOwner(), "module", "模块模式的 owner 不随网络状态变化");
 await client.queueRecord({ ...run, chart_id: "module-chart" });
-assert.equal(shared.game.ptmain.gameConfig.pendingScoreCount, 2);
+assert.equal(shared.game.ptmain.gameConfig.pendingScoreCount, 3, "legacy + rescued + 新成绩");
 assert.equal(await client.flushPending(), false);
 online = true;
 await client.syncPending();
-assert.deepEqual(moduleUploads.map(r => r.chartId).sort(), ["legacy", "module-chart"]);
+assert.deepEqual(moduleUploads.map(r => r.chartId).sort(), ["legacy", "module-chart", "rescued"]);
 assert.equal(shared.game.ptmain.gameConfig.pendingScoreCount, 0);
+// 救济只做一次：分区清空、标记落盘，再激活不会重复入队。
+assert.equal(await backend.getUserData("ptRecords:v2:module-guest"), null);
+assert.equal((await backend.getUserData("ptMigration:v1:module-guest-merged")).count, 1);
+assert.equal(shared.game.ptmain.gameConfig.ptBestRecords.rescued[0], 930000);
+await client.activateLocalRecords();
+assert.equal(shared.game.ptmain.gameConfig.pendingScoreCount, 0);
+assert.equal(moduleUploads.length, 3, "重复激活不得重复补传");
 assert.deepEqual(await backend.getUserData("pendingPtUploads"), {});
 // 网关对 isFc 只接受 JSON 布尔/0/1；客户端必须发真布尔（否则整条上传被判数值无效）。
 assert.ok(
@@ -281,8 +293,9 @@ assert.equal(reloaded.estimateChartRank("a", { score: 985000, acc: 98.5, is_fc: 
 // 冷启动时本地成绩与 Best30 立即可用（不需要网络）
 assert.equal(shared.game.ptmain.gameConfig.ptBestRecords["module-chart"][0], 990000);
 const localTop = reloaded.localBest30(30);
-assert.equal(localTop.records.length, 2);
-assert.equal(localTop.rks, 9.025);
+assert.equal(localTop.records.length, 3, "legacy + module-chart + 救济回来的 rescued");
+// 10*(0.95²)=9.025、10*(0.95²)=9.025、10*(0.93²)=8.649，均值 8.8997
+assert.equal(localTop.rks, 8.8997);
 assert.ok(localTop.records.every(row => row.chart_rks > 0));
 
 // 全站榜：联网存快照，离线读快照
