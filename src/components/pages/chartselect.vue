@@ -250,7 +250,9 @@
                 return list;
             },
             canBoard() {
-                return ptServer.available() && !this.forceOffline;
+                // 榜单按钮与网络状态无关：离线时看的是本地快照。
+                // （模块模式恒 true；独立版仍要求已登录，游客没有榜上身份。）
+                return ptServer.available();
             },
         },
         methods: {
@@ -372,6 +374,9 @@
                 const songMeta = group.localSong;
                 const chartMeta = diff.localChart;
                 if (!songMeta || !chartMeta) return;
+                // 开打前抓一份本曲榜单快照：热点 5 分钟就会把设备踢下线，结算时
+                // 大概率已经没网，预估名次只能靠这一刻拿到的数据。
+                void ptServer.prefetchChartBoard(this.chartIdOf(diff));
                 shared.game.ptmain.playConfig = JSON.parse(JSON.stringify(this.playSettings));
                 if (this.playSettings.previewMode || this.playSettings.adjustOffset) {
                     shared.game.ptmain.playConfig.practiseMode = true;
@@ -435,14 +440,25 @@
             async loadBoard(diff) {
                 const chartId = this.chartIdOf(diff);
                 if (!chartId) return;
-                this.boards[diff.key] = { loading: true, entries: [], me: null, error: "" };
-                const board = await ptServer.fetchChartLeaderboard(chartId);
+                // 先把本地快照摆出来（离线时这是唯一能看的东西），再去取实时数据。
+                const cached = ptServer.cachedChartBoard(chartId);
+                this.boards[diff.key] = {
+                    loading: !cached,
+                    entries: (cached && cached.entries) || [],
+                    me: (cached && cached.me) || null,
+                    stale: !!cached,
+                    at: (cached && cached.at) || 0,
+                    error: "",
+                };
+                const board = await ptServer.loadChartBoard(chartId, true);
                 if (!board) {
                     this.boards[diff.key] = {
                         loading: false,
                         entries: [],
                         me: null,
-                        error: this.$t("chartSelect.board.loadFailed"),
+                        stale: false,
+                        at: 0,
+                        error: this.$t("chartSelect.board.offline"),
                     };
                     return;
                 }
@@ -450,11 +466,30 @@
                     loading: false,
                     entries: board.entries,
                     me: board.me,
+                    stale: !!board.stale,
+                    at: board.at,
                     error: "",
                 };
             },
             boardDate(runAt) {
                 return runAt ? String(runAt).slice(0, 10) : "";
+            },
+            boardTime(at) {
+                if (!at) return "";
+                try {
+                    return new Date(at).format("m-d H:i");
+                } catch {
+                    return "";
+                }
+            },
+            /** 本机最佳单局（含还没上传的）：榜上查不到自己时，至少让玩家看到自己的成绩。 */
+            boardMyBest(diff) {
+                return bestScoreOf(diff.localChart);
+            },
+            boardMyBestText(diff) {
+                const best = this.boardMyBest(diff);
+                if (!best) return "";
+                return `${String(best.score).padStart(7, "0")} · ${(best.acc * 100).toFixed(2)}%`;
             },
 
             // ===== 数据装载 =====
@@ -1174,54 +1209,80 @@
                                     <div v-if="boards[diff.key].loading" class="csBoardNote">
                                         {{ $t("chartSelect.board.loading") }}
                                     </div>
-                                    <div
-                                        v-else-if="boards[diff.key].error"
-                                        class="csBoardNote csBoardError"
-                                    >
-                                        {{ boards[diff.key].error }}
-                                    </div>
-                                    <div
-                                        v-else-if="!boards[diff.key].entries.length"
-                                        class="csBoardNote"
-                                    >
-                                        {{ $t("chartSelect.board.empty") }}
-                                    </div>
                                     <template v-else>
                                         <div
-                                            v-for="entry in boards[diff.key].entries"
-                                            :key="entry.user_id"
-                                            class="csBoardRow"
-                                            :class="{ csBoardMe: entry.is_me }"
+                                            v-if="boards[diff.key].error"
+                                            class="csBoardNote csBoardError"
                                         >
-                                            <span class="csBoardRank">#{{ entry.rank }}</span>
-                                            <span class="csBoardName">{{ entry.name }}</span>
-                                            <span class="csBoardScore">
-                                                {{ String(entry.score).padStart(7, "0") }}
-                                            </span>
-                                            <span class="csBoardAcc">
-                                                {{ Number(entry.acc).toFixed(2) }}%
-                                            </span>
-                                            <span class="csBoardFc">
-                                                {{ entry.is_fc ? "FC" : "" }}
-                                            </span>
-                                            <span class="csBoardRks">
-                                                {{ Number(entry.rks).toFixed(2) }}
-                                            </span>
-                                            <span class="csBoardDate">
-                                                {{ boardDate(entry.run_at) }}
-                                            </span>
+                                            {{ boards[diff.key].error }}
                                         </div>
-                                        <div v-if="boards[diff.key].me" class="csBoardMeRow">
+                                        <div
+                                            v-else-if="boards[diff.key].stale"
+                                            class="csBoardNote csBoardStale"
+                                        >
                                             {{
-                                                $t("chartSelect.board.myRank", [
-                                                    boards[diff.key].me.rank,
+                                                $t("chartSelect.board.cachedAt", [
+                                                    boardTime(boards[diff.key].at),
                                                 ])
                                             }}
-                                            ·
+                                        </div>
+                                        <div
+                                            v-if="
+                                                !boards[diff.key].error &&
+                                                !boards[diff.key].entries.length
+                                            "
+                                            class="csBoardNote"
+                                        >
+                                            {{ $t("chartSelect.board.empty") }}
+                                        </div>
+                                        <template v-else-if="boards[diff.key].entries.length">
+                                            <div
+                                                v-for="entry in boards[diff.key].entries"
+                                                :key="entry.user_id"
+                                                class="csBoardRow"
+                                                :class="{ csBoardMe: entry.is_me }"
+                                            >
+                                                <span class="csBoardRank">#{{ entry.rank }}</span>
+                                                <span class="csBoardName">{{ entry.name }}</span>
+                                                <span class="csBoardScore">
+                                                    {{ String(entry.score).padStart(7, "0") }}
+                                                </span>
+                                                <span class="csBoardAcc">
+                                                    {{ Number(entry.acc).toFixed(2) }}%
+                                                </span>
+                                                <span class="csBoardFc">
+                                                    {{ entry.is_fc ? "FC" : "" }}
+                                                </span>
+                                                <span class="csBoardRks">
+                                                    {{ Number(entry.rks).toFixed(2) }}
+                                                </span>
+                                                <span class="csBoardDate">
+                                                    {{ boardDate(entry.run_at) }}
+                                                </span>
+                                            </div>
+                                            <div v-if="boards[diff.key].me" class="csBoardMeRow">
+                                                {{
+                                                    $t("chartSelect.board.myRank", [
+                                                        boards[diff.key].me.rank,
+                                                    ])
+                                                }}
+                                                ·
+                                                {{
+                                                    String(boards[diff.key].me.score).padStart(
+                                                        7,
+                                                        "0"
+                                                    )
+                                                }}
+                                                ·
+                                                {{ Number(boards[diff.key].me.acc).toFixed(2) }}%
+                                            </div>
+                                        </template>
+                                        <div v-if="boardMyBest(diff)" class="csBoardMeRow">
                                             {{
-                                                String(boards[diff.key].me.score).padStart(7, "0")
+                                                $t("chartSelect.board.myBest", [
+                                                    boardMyBestText(diff),
+                                                ])
                                             }}
-                                            · {{ Number(boards[diff.key].me.acc).toFixed(2) }}%
                                         </div>
                                     </template>
                                 </template>
@@ -1717,6 +1778,11 @@
 
     #chartSelectNew .csBoardError {
         color: #c62828;
+    }
+
+    /* 本地缓存快照：中性提示色，既不是错误也不假装是实时数据 */
+    #chartSelectNew .csBoardStale {
+        color: #8a6d1f;
     }
 
     #chartSelectNew .csBoardRow {

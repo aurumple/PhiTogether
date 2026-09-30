@@ -579,6 +579,12 @@ const ptAppInstance = createApp({
         async playChart(settings) {
             this._playRecordOwner = ptServer.recordOwner();
             if (settings) this.playConfig = JSON.parse(JSON.stringify(settings));
+            // 开打前抓一份本曲榜单快照：热点 5 分钟踢人，打完歌时大概率已断网，
+            // 结算画面的预估名次只能用这一刻的数据（联网时它也是最新的）。
+            const prefetchId = String(
+                JSON.parse(sessionStorage.getItem("loadedChart") || "{}").id || ""
+            );
+            if (prefetchId) void ptServer.prefetchChartBoard(prefetchId);
             this.$router.push({ path: "/playing", query: { auto: 1 } });
             if (shared.game.restartClearRecord) shared.game.restartClearRecord();
         },
@@ -613,14 +619,15 @@ const ptAppInstance = createApp({
                         this._playRecordOwner || ptServer.recordOwner()
                     );
                     if (queued) {
-                        this.updateResultRank(chartId, false);
+                        // 先把预估名次摆出来：纯本地、同步，断网也一定有东西看。
+                        this.updateResultRank(chartId, "estimate");
                         void ptServer.syncPending().then(ok => {
                             if (
                                 String(
                                     JSON.parse(sessionStorage.getItem("loadedChart") || "{}").id
                                 ) === chartId
                             )
-                                this.updateResultRank(chartId, ok);
+                                this.updateResultRank(chartId, ok ? "confirmed" : "pending");
                         });
                     }
                 } catch (error) {
@@ -636,8 +643,16 @@ const ptAppInstance = createApp({
                 shared.game.multiInstance.uploadScore();
             }
         },
-        /** 结算画面的「本曲排名」：上传后查询名次；离线/失败给「待上传」提示。 */
-        async updateResultRank(chartId, uploaded) {
+        /**
+         * 结算画面的「本曲排名」。
+         *
+         * state = "estimate"：用开打前的榜单快照 + 合并后的本地最佳单局算预估名次。
+         *   —— 这是主路径：热点随时把设备踢下线，打完歌时通常已经没网，服务端确认
+         *      根本来不及，所以预估必须是纯本地、同步、一定能给出的。
+         * state = "confirmed"：上传成功，换成服务端确认的名次。
+         * state = "pending"：还没传上去，保留预估并承接「待上传」文案。
+         */
+        async updateResultRank(chartId, state) {
             if (!ptServer.available()) {
                 shared.game.ptRank = null;
                 return;
@@ -646,13 +661,23 @@ const ptAppInstance = createApp({
                 text: this.$t("chartSelect.board.pendingUpload"),
                 color: "#fe4365",
             };
-            if (!uploaded) {
-                shared.game.ptRank = pendingText;
+            // 预估名次先算好：后面每条失败分支都回落到它，绝不显示空白。
+            const estimate = ptServer.estimateChartRank(chartId);
+            const estimatedText = estimate
+                ? {
+                      text: estimate.outside
+                          ? this.$t("chartSelect.board.estimateOutside")
+                          : this.$t("chartSelect.board.estimateRank", [estimate.rank]),
+                      color: "#ffd479",
+                  }
+                : null;
+            if (state !== "confirmed") {
+                shared.game.ptRank = estimatedText || pendingText;
                 return;
             }
             const board = await ptServer.fetchChartLeaderboard(chartId);
             if (!board) {
-                shared.game.ptRank = pendingText;
+                shared.game.ptRank = estimatedText || pendingText;
                 return;
             }
             shared.game.ptRank = board.me
@@ -660,7 +685,7 @@ const ptAppInstance = createApp({
                       text: this.$t("chartSelect.board.resultRank", [board.me.rank]),
                       color: "#a2e27f",
                   }
-                : null;
+                : estimatedText;
         },
         async playerLoaded() {
             // add lchzh pause
@@ -1236,19 +1261,25 @@ shared.game.ptmain = ptmain;
 // 会话就绪后统一同步一次 rks 并清空待上传成绩（挂载早期的写回会被守卫跳过）
 void ptServer.activateLocalRecords().catch(console.error);
 if (ptServer.available()) void ptServer.syncPending();
-// 离线成绩同步：网络恢复时清空待上传队列
-window.addEventListener("online", () => {
-    if (ptServer.available()) void ptServer.syncPending();
+
+/** 待上传队列非空时才值得重试（避免每次回到前台都白跑一趟网关）。 */
+function flushPendingScores() {
+    if (!ptServer.available()) return;
+    if (!ptmain.gameConfig.pendingScoreCount) return;
+    void ptServer.syncPending();
+}
+
+// 离线成绩同步：网络恢复时清空待上传队列。容器是沙箱 iframe，online 事件不保证
+// 一定发到这一层，所以回到前台/重新聚焦时也补一次——热点 5 分钟踢人之后，
+// 玩家再拿起平板就是最常见的补传时机。
+window.addEventListener("online", flushPendingScores);
+window.addEventListener("focus", flushPendingScores);
+document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) flushPendingScores();
 });
 // Retry server outages even when the browser never emits another online event.
 setInterval(() => {
-    if (
-        !document.hidden &&
-        router.currentRoute.value.path !== "/playing" &&
-        ptServer.available() &&
-        ptmain.gameConfig.pendingScoreCount
-    )
-        void ptServer.syncPending();
+    if (!document.hidden && router.currentRoute.value.path !== "/playing") flushPendingScores();
 }, 30000);
 shared.game.msgHandler = msgHandler;
 shared.game.graphicHandler = graphicHandler;

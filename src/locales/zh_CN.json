@@ -153,6 +153,11 @@
             "empty": "暂无成绩",
             "myRank": "我的排名 #{0}",
             "resultRank": "本曲排名 #{0}",
+            "cachedAt": "离线：显示 {0} 缓存的榜单",
+            "offline": "当前离线，本曲还没有榜单缓存；联网打开一次榜单即可留下快照。",
+            "myBest": "我的最佳：{0}",
+            "estimateRank": "本曲预估 #{0}",
+            "estimateOutside": "本曲预估：10 名以外",
             "pendingUpload": "成绩已本地保存，联网后上传"
         },
         "chapters": {
@@ -701,6 +706,11 @@
         "empty": "还没有任何成绩，去打一首歌吧",
         "colPlayer": "玩家",
         "colPlays": "成绩数",
+        "serverRks": "服务端 RKS",
+        "localRks": "本地 RKS",
+        "pendingNote": "本地待同步 {0} 首",
+        "offlineCache": "离线：显示 {0} 缓存的全站榜",
+        "offlineNoData": "离线且尚未缓存榜单：联网打开一次本页即可留下快照",
         "myRks": "我的 RKS",
         "best30Hint": "Best30 均值",
         "noRecords": "暂无成绩记录",

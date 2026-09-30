@@ -1,18 +1,60 @@
 <script>
     import shared from "@utils/js/shared.js";
-    import { fetchLeaderboard, fetchMyStats } from "../../utils/ptServer";
+    import { ptServer } from "../../utils/ptServer";
     export default {
         name: "ptLeaderboard",
         data() {
             return {
                 loading: true,
-                failed: false,
                 entries: [],
                 myRank: null,
                 myRks: 0,
+                // 全站榜快照的来源：实时 / 本地缓存（离线时唯一能显示的东西）
+                rankStale: false,
+                rankAt: 0,
+                rankLoaded: false,
+                // 本地 Best30（含未上传）：离线也一定有内容
+                localRecords: [],
+                localRks: 0,
+                pending: 0,
+                serverRecords: [],
+                serverRks: null,
                 tab: "rank", // rank=全站排名 best=我的 Best30
-                myRecords: [],
             };
+        },
+        computed: {
+            /** Best30 明细：本地行优先（含待上传的新成绩），服务端补齐元数据与缺行。 */
+            bestRows() {
+                const remote = new Map(
+                    (this.serverRecords || []).map(r => [String(r.chart_id), r])
+                );
+                const rows = (this.localRecords || []).map(row => {
+                    const server = remote.get(String(row.chart_id));
+                    remote.delete(String(row.chart_id));
+                    return {
+                        ...row,
+                        song_name: row.song_name || (server && server.song_name) || "",
+                        difficulty: row.difficulty || (server && server.difficulty) || "",
+                        is_fc: !!row.is_fc,
+                        chart_rks: Number(row.chart_rks) || 0,
+                    };
+                });
+                // 服务端有、本地没有的行（换过设备或清过本地数据）同样要展示
+                for (const row of remote.values())
+                    rows.push({
+                        ...row,
+                        is_fc: !!row.is_fc,
+                        chart_rks: Number(row.chart_rks) || 0,
+                    });
+                return rows.sort((a, b) => b.chart_rks - a.chart_rks).slice(0, 30);
+            },
+            /** 本地 RKS 含待上传成绩，与服务端值不同时把两个都摆出来，不假装一致。 */
+            rksMismatch() {
+                return (
+                    this.serverRks !== null &&
+                    Math.abs(Number(this.serverRks) - Number(this.localRks)) > 0.0005
+                );
+            },
         },
         async activated() {
             await this.refresh();
@@ -20,33 +62,34 @@
         methods: {
             async refresh() {
                 this.loading = true;
-                this.failed = false;
-                const data = await fetchLeaderboard();
-                if (!data) {
-                    this.failed = true;
-                    this.loading = false;
-                    return;
+                await this.loadLocal();
+                const [snapshot, stats] = await Promise.all([
+                    ptServer.leaderboardSnapshot().catch(() => null),
+                    ptServer.fetchMyStats().catch(() => null),
+                ]);
+                this.rankLoaded = true;
+                if (snapshot) {
+                    this.entries = snapshot.entries || [];
+                    this.myRank = snapshot.my_rank ?? null;
+                    this.myRks = snapshot.my_rks || 0;
+                    this.rankStale = !!snapshot.stale;
+                    this.rankAt = snapshot.at || 0;
                 }
-                this.entries = data.entries || [];
-                this.myRank = data.my_rank;
-                this.myRks = data.my_rks || 0;
-                if (this.tab === "best") await this.loadMyRecords();
+                if (stats) {
+                    this.serverRecords = stats.records || [];
+                    this.serverRks = Number(stats.rks) || 0;
+                }
                 this.loading = false;
+            },
+            async loadLocal() {
+                await ptServer.activateLocalRecords().catch(() => null);
+                const local = ptServer.localBest30(30);
+                this.localRecords = local.records || [];
+                this.localRks = local.rks || 0;
+                this.pending = local.pending || 0;
             },
             async switchTab(tab) {
                 this.tab = tab;
-                if (tab === "best" && this.myRecords.length === 0) {
-                    this.loading = true;
-                    await this.loadMyRecords();
-                    this.loading = false;
-                }
-            },
-            async loadMyRecords() {
-                const stats = await fetchMyStats();
-                if (stats) {
-                    this.myRecords = stats.records || [];
-                    this.myRks = stats.rks || this.myRks;
-                }
             },
             fmtRks(v) {
                 return Number(v || 0).toFixed(3);
@@ -56,6 +99,14 @@
             },
             fmtAcc(v) {
                 return Number(v || 0).toFixed(4) + "%";
+            },
+            fmtTime(at) {
+                if (!at) return "";
+                try {
+                    return new Date(at).format("m-d H:i");
+                } catch {
+                    return "";
+                }
             },
             back() {
                 shared.game.ptmain.$router.push("/startPage");
@@ -76,24 +127,38 @@
                     <button :class="{ active: tab === 'best' }" @click="switchTab('best')">
                         {{ $t("ptLeaderboard.tabBest") }}
                     </button>
-                    <button @click="refresh">{{ $t("ptLeaderboard.refresh") }}</button>
+                    <button :disabled="loading" @click="refresh">
+                        {{ $t("ptLeaderboard.refresh") }}
+                    </button>
                     <button @click="back">{{ $t("ptLeaderboard.back") }}</button>
                 </div>
             </div>
 
             <div v-if="loading" class="ptLbStatus">{{ $t("ptLeaderboard.loading") }}</div>
-            <div v-else-if="failed" class="ptLbStatus">
-                {{ $t("ptLeaderboard.failed") }}
-            </div>
 
             <template v-else>
                 <div v-if="tab === 'rank'">
-                    <div class="ptLbSummary">
-                        {{ $t("ptLeaderboard.myRank") }}：<b>{{ myRank || $t("ptLeaderboard.notRanked") }}</b>
-                        &nbsp;&nbsp;RKS：<b>{{ fmtRks(myRks) }}</b>
+                    <div v-if="rankStale" class="ptLbNotice">
+                        {{ $t("ptLeaderboard.offlineCache", [fmtTime(rankAt)]) }}
                     </div>
-                    <div v-if="entries.length === 0" class="ptLbStatus">
-                        {{ $t("ptLeaderboard.empty") }}
+                    <div class="ptLbSummary">
+                        {{ $t("ptLeaderboard.myRank") }}：
+                        <b>{{ myRank || $t("ptLeaderboard.notRanked") }}</b>
+                        &nbsp;&nbsp;{{ $t("ptLeaderboard.serverRks") }}：
+                        <b>{{ fmtRks(myRks) }}</b>
+                        <template v-if="pending">
+                            &nbsp;&nbsp;
+                            <span class="ptLbPending">
+                                {{ $t("ptLeaderboard.pendingNote", [pending]) }}
+                            </span>
+                        </template>
+                    </div>
+                    <div v-if="!entries.length" class="ptLbStatus">
+                        {{
+                            rankStale
+                                ? $t("ptLeaderboard.offlineNoData")
+                                : $t("ptLeaderboard.empty")
+                        }}
                     </div>
                     <div v-else class="ptLbTable">
                         <div class="ptLbRow ptLbRowHead">
@@ -118,9 +183,23 @@
 
                 <div v-else>
                     <div class="ptLbSummary">
-                        {{ $t("ptLeaderboard.myRks") }}：<b>{{ fmtRks(myRks) }}</b>（{{ $t("ptLeaderboard.best30Hint") }}）
+                        {{ $t("ptLeaderboard.localRks") }}：
+                        <b>{{ fmtRks(localRks) }}</b>
+                        （{{ $t("ptLeaderboard.best30Hint") }}）
+                        <template v-if="rksMismatch">
+                            &nbsp;&nbsp;{{ $t("ptLeaderboard.serverRks") }}：
+                            <b>{{ fmtRks(serverRks) }}</b>
+                        </template>
+                        <template v-if="pending">
+                            &nbsp;&nbsp;
+                            <span class="ptLbPending">
+                                {{ $t("ptLeaderboard.pendingNote", [pending]) }}
+                            </span>
+                        </template>
                     </div>
-                    <div v-if="myRecords.length === 0" class="ptLbStatus">{{ $t("ptLeaderboard.noRecords") }}</div>
+                    <div v-if="!bestRows.length" class="ptLbStatus">
+                        {{ $t("ptLeaderboard.noRecords") }}
+                    </div>
                     <div v-else class="ptLbTable">
                         <div class="ptLbRow ptLbRowHead">
                             <span class="ptLbRank">#</span>
@@ -128,7 +207,7 @@
                             <span class="ptLkNum">{{ $t("ptLeaderboard.colChartRks") }}</span>
                             <span class="ptLbPlays">{{ $t("ptLeaderboard.colScoreAcc") }}</span>
                         </div>
-                        <div v-for="(r, i) in myRecords" :key="r.chart_id" class="ptLbRow">
+                        <div v-for="(r, i) in bestRows" :key="r.chart_id" class="ptLbRow">
                             <span class="ptLbRank">{{ i + 1 }}</span>
                             <span class="ptLbName">
                                 {{ r.song_name || r.chart_id }}
@@ -193,6 +272,18 @@
     .ptLbSummary {
         margin-bottom: 1vh;
         font-size: 1.05em;
+    }
+    .ptLbNotice {
+        margin-bottom: 1vh;
+        padding: 4px 10px;
+        border-radius: 6px;
+        background: rgba(214, 158, 46, 0.18);
+        color: #8a6d1f;
+        font-size: 0.92em;
+    }
+    .ptLbPending {
+        color: #c62828;
+        font-size: 0.92em;
     }
     .ptLbStatus {
         padding: 4vh 0;

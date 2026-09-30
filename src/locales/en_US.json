@@ -153,6 +153,11 @@
             "empty": "No scores yet",
             "myRank": "My rank #{0}",
             "resultRank": "Chart rank #{0}",
+            "cachedAt": "Offline: showing the board cached at {0}",
+            "offline": "Offline and this chart has no cached board yet; open it once while online to keep a snapshot.",
+            "myBest": "My best: {0}",
+            "estimateRank": "Estimated rank #{0}",
+            "estimateOutside": "Estimated: outside the top 10",
             "pendingUpload": "Score saved locally; will upload when online"
         },
         "chapters": {
@@ -700,6 +705,11 @@
         "empty": "No scores yet — go play a song!",
         "colPlayer": "Player",
         "colPlays": "Scores",
+        "serverRks": "Server RKS",
+        "localRks": "Local RKS",
+        "pendingNote": "{0} score(s) waiting to sync",
+        "offlineCache": "Offline: showing the leaderboard cached at {0}",
+        "offlineNoData": "Offline and no cached leaderboard yet; open this page once while online to keep a snapshot",
         "myRks": "My RKS",
         "best30Hint": "mean of Best 30",
         "noRecords": "No records yet",
