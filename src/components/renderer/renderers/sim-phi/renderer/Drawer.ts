@@ -419,7 +419,9 @@ export function loopCanvas() {
     if (simphiPlayer.tmps.showStat)
         simphiPlayer.app.ctxos.drawImage(
             simphiPlayer.res["Pause"],
-            lineScale * 0.6 + simphiPlayer.tmps.statStatus.pause.offsetX,
+            lineScale * 0.6 +
+                simphiPlayer.app.pauseShiftX +
+                simphiPlayer.tmps.statStatus.pause.offsetX,
             lineScale * 0.7 + simphiPlayer.tmps.statStatus.pause.offsetY,
             lineScale * 0.63,
             lineScale * 0.7

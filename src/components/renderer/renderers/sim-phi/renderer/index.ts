@@ -6,6 +6,11 @@ import { Chart } from "./Chart";
 import { JudgeLine, JudgelineExtends } from "./Chart/JudgeLine";
 import { Note, NoteExtends } from "./Chart/Note";
 
+// 打歌界面左上角的暂停按钮要避让宿主（OneTap）那个 56px 可拖动悬浮返回按钮：它默认停在
+// 右下角，但玩家一拖到左上角就压住暂停按钮。右移量按 CSS 像素定义，再由 lowResFactor
+// 换算成画布像素，所以换分辨率或调「渲染精度」都不会让让位距离变样。
+const PAUSE_BUTTON_SHIFT_PX = 60;
+
 export class Renderer {
     public stage: HTMLDivElement;
     public canvas: HTMLCanvasElement;
@@ -76,6 +81,10 @@ export class Renderer {
     setLowResFactor(num: number): void {
         this._setLowResFactor(Number(num) || 1);
         this._resizeCanvas();
+    }
+    /** 暂停按钮的右移量（画布像素）。画布位图 = CSS 像素 × lowResFactor。 */
+    public get pauseShiftX(): number {
+        return PAUSE_BUTTON_SHIFT_PX * this.lowResFactor;
     }
     private _resizeCanvas(): void {
         const pt = shared.game.ptmain;

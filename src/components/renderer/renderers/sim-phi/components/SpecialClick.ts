@@ -62,8 +62,9 @@ export const specialClick = {
         else this.time[id] = now;
     },
     qwq(offsetX, offsetY) {
-        const { lineScale } = simphiPlayer.app;
-        if (offsetX < lineScale * 1.5 && offsetY < lineScale * 1.5) this.click(0);
+        const { lineScale, pauseShiftX } = simphiPlayer.app;
+        // 左上角点按区与暂停图标一起右移，让开的正是宿主悬浮按钮压住的那条边。
+        if (offsetX < lineScale * 1.5 + pauseShiftX && offsetY < lineScale * 1.5) this.click(0);
         if (
             offsetX > simphiPlayer.app.canvasos.width - lineScale * 1.5 &&
             offsetY < lineScale * 1.5

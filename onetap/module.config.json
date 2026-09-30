@@ -2,7 +2,7 @@
   "moduleId": "phitogether",
   "name": "PhiTogether",
   "summary": "音游（内测）：单人游玩、谱库按曲下载、成绩与排行榜",
-  "displayVersion": "2.2.10-onetap.9",
+  "displayVersion": "2.2.10-onetap.10",
   "bridgeMajor": 2,
   "storageSchema": 1,
   "capabilities": [
