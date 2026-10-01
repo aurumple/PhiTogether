@@ -594,6 +594,7 @@
                 "inputOffset": "输入延迟",
                 "doCalibrate": "校准输入延迟",
                 "volume": "音效音量",
+                "disableHitSound": "关闭打击音效",
                 "volumeOptions": {
                     "off": "关闭",
                     "low": "蚊子叫（？",

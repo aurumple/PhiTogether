@@ -593,6 +593,7 @@
                 "inputOffset": "Input Offset(ms): ",
                 "doCalibrate": "Calibrate",
                 "volume": "SoundFX Volume",
+                "disableHitSound": "Disable Hit Sounds",
                 "volumeOptions": {
                     "off": "Off",
                     "low": "Equivalent Sound of a Mosquito",

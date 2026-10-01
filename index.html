@@ -854,6 +854,16 @@
                                             </option>
                                         </select>
                                     </div>
+                                    <div>
+                                        <input
+                                            type="checkbox"
+                                            id="disableHitSound"
+                                            v-model="gameConfig.disableHitSound"
+                                        />
+                                        <label for="disableHitSound">
+                                            {{ $t("settings.settings.resources.disableHitSound") }}
+                                        </label>
+                                    </div>
                                 </div>
                                 <br />
                                 <div style="display: block">

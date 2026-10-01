@@ -2,6 +2,7 @@ import { recordMgr } from "@components/recordMgr/recordMgr";
 import { replayMgr } from "@components/recordMgr/replayMgr";
 import { frameTimer } from "@utils/js/common";
 import { audio } from "@utils/js/aup";
+import shared from "@utils/js/shared";
 
 import { getJudgeOffset, getJudgeDistance } from "./judgeUtils";
 import { JudgeEvent } from "./JudgeEvent";
@@ -37,6 +38,19 @@ interface NoteExtends {
     nearNotes: NoteExtends[];
     badTime?: number;
     statOffset?: number;
+}
+
+/** 打击音效资源名：Tap/Hold 头判与 Drag、Flick 各一种（见 ResourcePack/skin.js）。 */
+type HitSoundName = "HitSong0" | "HitSong1" | "HitSong2";
+
+/**
+ * 播放打击音效。设置页「关闭打击音效」打开时整段跳过（`disableHitSound`）；
+ * 与「音效音量」互不影响：后者改的是增益，这里是不播。
+ */
+function playHitSound(name: HitSoundName): void {
+    if (shared.game.ptmain.gameConfig.disableHitSound) return;
+    if (!simphiPlayer.emitter.eq("play") || simphiPlayer.app.pauseTime) return;
+    audio.play(simphiPlayer.res[name], { gainrate: simphiPlayer.app.soundVolume });
 }
 
 export const judgeManager = {
@@ -168,10 +182,7 @@ export const judgeManager = {
                     }
                 } else if (deltaTime < 0) {
                     // Drag过线
-                    if (simphiPlayer.emitter.eq("play") && !simphiPlayer.app.pauseTime)
-                        audio.play(simphiPlayer.res["HitSong1"], {
-                            gainrate: simphiPlayer.app.soundVolume,
-                        });
+                    playHitSound("HitSong1");
                     simphiPlayer.hitImageList.add(
                         HitImage.perfect(note.projectX, note.projectY, note)
                     );
@@ -230,10 +241,7 @@ export const judgeManager = {
                         }
                     }
                 } else if (deltaTime < 0) {
-                    if (simphiPlayer.emitter.eq("play") && !simphiPlayer.app.pauseTime)
-                        audio.play(simphiPlayer.res["HitSong2"], {
-                            gainrate: simphiPlayer.app.soundVolume,
-                        });
+                    playHitSound("HitSong2");
                     simphiPlayer.hitImageList.add(
                         HitImage.perfect(note.projectX, note.projectY, note)
                     );
@@ -293,10 +301,7 @@ export const judgeManager = {
                             simphiPlayer.stat.addDisp(
                                 Math.max(deltaTime2, (-1 - note.frameCount) * this.time.AP || 0)
                             );
-                            if (simphiPlayer.emitter.eq("play") && !simphiPlayer.app.pauseTime)
-                                audio.play(simphiPlayer.res["HitSong0"], {
-                                    gainrate: simphiPlayer.app.soundVolume,
-                                });
+                            playHitSound("HitSong0");
                             if (re.a === 7) {
                                 note.holdStatus = 7; //console.log('Good(Early)', i.name);
                                 simphiPlayer.hitImageList.add(
@@ -438,10 +443,7 @@ export const judgeManager = {
                         simphiPlayer.stat.addDisp(
                             Math.max(deltaTime2, (-1 - note.frameCount) * this.time.AP || 0)
                         );
-                        if (simphiPlayer.emitter.eq("play") && !simphiPlayer.app.pauseTime)
-                            audio.play(simphiPlayer.res["HitSong0"], {
-                                gainrate: simphiPlayer.app.soundVolume,
-                            });
+                        playHitSound("HitSong0");
                         if (deltaTime2 > this.time.p) {
                             note.holdStatus = 7; //console.log('Good(Early)', i.name);
                             simphiPlayer.hitImageList.add(

@@ -297,6 +297,7 @@ const ptAppInstance = createApp({
                 noteScale: "1.15",
                 backgroundDim: "0.6",
                 volume: "1",
+                disableHitSound: false,
                 inputOffset: "90",
                 notifyFinished: false,
                 isMaxFrame: false,
