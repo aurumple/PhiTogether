@@ -24,9 +24,11 @@ const TOUCH_INSET_RATIO = 0.25;
 /** DisabledBlockShow 渐显时长（官方预制体常量） */
 const FADE_IN = 0.5;
 
-export const BLOCK_COLOR_R = 255;
-/** 官方材质 _FillColor rgb(0.713,0.235,0.235)；仅视觉用 */
-export const BLOCK_FILL = [Math.round(0.713 * 255), Math.round(0.235 * 255), Math.round(0.235 * 255)] as const;
+/**
+ * 噪域填充色。官方材质 _FillColor 是 rgb(0.713,0.235,0.235)≈rgb(182,60,60)，
+ * 实机观感偏浅，按用户要求加深为 rgb(139,0,0)（DarkRed）；仅视觉，判定不受影响。
+ */
+export const BLOCK_FILL = [139, 0, 0] as const;
 
 interface Vec2 {
     x: number;
