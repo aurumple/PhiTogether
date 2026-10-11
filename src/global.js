@@ -26,6 +26,11 @@ import { replayMgr } from "@components/recordMgr/replayMgr.js";
 import ptdb from "@components/ptdb";
 import "@utils/js/errHandler";
 import { Utils } from "@utils/js/utils";
+import {
+    DEFAULT_BLOCK_FILL,
+    toColorInputValue,
+    toRgbText,
+} from "@renderers/sim-phi/components/BlockArea/color";
 
 if (import.meta.env.DEV) self.ptdb = ptdb;
 
@@ -296,6 +301,7 @@ const ptAppInstance = createApp({
                 aspectRatio: "1.5",
                 noteScale: "1.15",
                 backgroundDim: "0.6",
+                blockAreaColor: "#4d2220",
                 volume: "1",
                 disableHitSound: false,
                 inputOffset: "90",
@@ -416,6 +422,19 @@ const ptAppInstance = createApp({
                     : null
             );
         },
+        // 噪域取色盘：<input type="color"> 只认 `#rrggbb`，而配置里可能存着旧写法，
+        // 因此读写都过一遍解析（写回时统一成 hex）。
+        blockAreaColorValue: {
+            get() {
+                return toColorInputValue(this.gameConfig.blockAreaColor);
+            },
+            set(value) {
+                this.gameConfig.blockAreaColor = toColorInputValue(value);
+            },
+        },
+        blockAreaColorText() {
+            return toRgbText(this.gameConfig.blockAreaColor);
+        },
     },
     watch: {
         gameConfig: {
@@ -520,6 +539,10 @@ const ptAppInstance = createApp({
         },
     },
     methods: {
+        /** 噪域颜色恢复默认 rgb(77,34,32)（对应 #4d2220）。 */
+        resetBlockAreaColor() {
+            this.gameConfig.blockAreaColor = toColorInputValue(DEFAULT_BLOCK_FILL);
+        },
         loadCustomRes() {
             msgHandler.sendMessage(this.$t("loadingPage.loadingRes"));
             shared.game.simphi.reloadRes(this.gameConfig.customResourceLink, true);

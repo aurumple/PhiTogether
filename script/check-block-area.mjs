@@ -95,7 +95,7 @@ function close(a, b, eps = 1e-4) {
 }
 
 const { blockEase } = loadTS(resolve(repo, "src/components/renderer/renderers/sim-phi/components/BlockArea/ease.ts"));
-const { BlockAreaSystem } = loadTS(resolve(repo, "src/components/renderer/renderers/sim-phi/components/BlockArea/index.ts"));
+const { BlockAreaSystem, resolveBlockFill } = loadTS(resolve(repo, "src/components/renderer/renderers/sim-phi/components/BlockArea/index.ts"));
 
 // ---------- 1. ease ----------
 ok(blockEase(0, 0.3) === 0.3, "ease 0 线性");
@@ -422,6 +422,39 @@ ok(close(blockEase(5, 0.75), 1 - (0.25) ** 3), "ease 5 (Out cubic)");
     ok(!sys.hasAreas, "[] -> inert");
     sys.update(1); // 不应抛错
     ok(sys.visibleAreas().length === 0, "inert 下渲染无输出");
+}
+
+// ---------- 9. 噪域颜色配置 ----------
+{
+    const color = loadTS(resolve(repo, "src/components/renderer/renderers/sim-phi/components/BlockArea/color.ts"));
+    const eq = (got, want, label) => ok(got.join(",") === want.join(","), `${label} -> ${got.join(",")} (want ${want.join(",")})`);
+
+    eq(color.DEFAULT_BLOCK_FILL, [77, 34, 32], "默认色 rgb(77,34,32)");
+    eq(color.parseBlockFill("#4d2220"), [77, 34, 32], "解析 #rrggbb");
+    eq(color.parseBlockFill("4d2220"), [77, 34, 32], "解析无 # 的 rrggbb");
+    eq(color.parseBlockFill("#f00"), [255, 0, 0], "解析 #rgb 缩写");
+    eq(color.parseBlockFill("rgb(77, 34, 32)"), [77, 34, 32], "解析 rgb() 写法");
+    eq(color.parseBlockFill("77,34,32"), [77, 34, 32], "解析三元组文本");
+    eq(color.parseBlockFill("  139,0,0 "), [139, 0, 0], "解析容忍空白");
+    eq(color.parseBlockFill("rgb(300,-5,12)"), [255, 0, 12], "越界分量钳制");
+    eq(color.parseBlockFill(""), [77, 34, 32], "空串回退默认");
+    eq(color.parseBlockFill(undefined), [77, 34, 32], "undefined 回退默认");
+    eq(color.parseBlockFill(null), [77, 34, 32], "null 回退默认");
+    eq(color.parseBlockFill("#12345"), [77, 34, 32], "非法长度回退默认");
+    eq(color.parseBlockFill("#gggggg"), [77, 34, 32], "非法字符回退默认");
+    eq(color.parseBlockFill("rgb(a,b,c)"), [77, 34, 32], "非数字回退默认");
+    ok(color.toColorInputValue("#4d2220") === "#4d2220", "toColorInputValue 回显 hex");
+    ok(color.toColorInputValue("139,0,0") === "#8b0000", "toColorInputValue 归一化旧写法");
+    ok(color.toColorInputValue(undefined) === "#4d2220", "toColorInputValue 默认值");
+    ok(color.toRgbText("#4d2220") === "rgb(77, 34, 32)", "toRgbText 文本");
+
+    // resolveBlockFill 读配置并缓存：改配置后必须立刻反映到渲染取值
+    shared.game.ptmain.gameConfig.blockAreaColor = "#8b0000";
+    eq(resolveBlockFill(), [139, 0, 0], "resolveBlockFill 读配置");
+    shared.game.ptmain.gameConfig.blockAreaColor = "77,34,32";
+    eq(resolveBlockFill(), [77, 34, 32], "resolveBlockFill 跟随配置变化");
+    delete shared.game.ptmain.gameConfig.blockAreaColor;
+    eq(resolveBlockFill(), [77, 34, 32], "配置缺失时回退默认");
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

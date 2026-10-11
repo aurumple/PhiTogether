@@ -559,6 +559,9 @@
                     "bright": "较亮",
                     "light": "明亮"
                 },
+                "blockAreaColor": "噪域颜色",
+                "blockAreaColorReset": "恢复默认",
+                "blockAreaColorHint": "点方块打开系统调色盘；默认 rgb(77, 34, 32)",
                 "defaultRankMethod": "排名依据偏好",
                 "defaultRankMethodOptions": {
                     "score": "按分数",

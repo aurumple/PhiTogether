@@ -40,6 +40,7 @@ export interface GameConfig {
     aspectRatio: string;
     noteScale: string;
     backgroundDim: string;
+    blockAreaColor: string;
     volume: string;
     inputOffset: string;
     notifyFinished: boolean;
@@ -89,6 +90,7 @@ export const defaultGameConfig = {
     aspectRatio: "1.5",
     noteScale: "1.15",
     backgroundDim: "0.6",
+    blockAreaColor: "#4d2220",
     volume: "2",
     inputOffset: "90",
     notifyFinished: false,

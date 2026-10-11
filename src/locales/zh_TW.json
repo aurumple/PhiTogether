@@ -558,6 +558,9 @@
                     "bright": "較亮",
                     "light": "明亮"
                 },
+                "blockAreaColor": "噪域顏色",
+                "blockAreaColorReset": "恢復預設",
+                "blockAreaColorHint": "點方塊開啟系統調色盤；預設 rgb(77, 34, 32)",
                 "defaultRankMethod": "排名依據偏好",
                 "defaultRankMethodOptions": {
                     "score": "依據分數",

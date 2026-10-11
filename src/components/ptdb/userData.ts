@@ -84,6 +84,7 @@ function parseGameConfig(gameConfig: GameConfig): ParsedGameConfig {
             aspectRatio: "",
             noteScale: "",
             backgroundDim: "",
+            blockAreaColor: "",
             volume: "",
             inputOffset: "",
             notifyFinished: false,

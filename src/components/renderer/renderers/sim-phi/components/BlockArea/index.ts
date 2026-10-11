@@ -14,6 +14,7 @@
  *    最后 center += moveTarget - originalCenter（move 不破坏 anchor 累积）。
  */
 import { blockEase } from "./ease";
+import { DEFAULT_BLOCK_FILL, parseBlockFill } from "./color";
 import shared from "@utils/js/shared";
 import { simphiPlayer } from "../../playerMain";
 
@@ -25,10 +26,25 @@ const TOUCH_INSET_RATIO = 0.25;
 const FADE_IN = 0.5;
 
 /**
- * 噪域填充色。官方材质 _FillColor 是 rgb(0.713,0.235,0.235)≈rgb(182,60,60)，
- * 实机观感偏浅，按用户要求加深为 rgb(139,0,0)（DarkRed）；仅视觉，判定不受影响。
+ * 噪域填充色（仅视觉，判定不受影响）。可在设置页用取色盘改（`blockAreaColor`），
+ * 默认 rgb(77,34,32)：官方材质 _FillColor 是 rgb(182,60,60)，实机观感偏浅，按用户要求加深。
  */
-export const BLOCK_FILL = [139, 0, 0] as const;
+export { DEFAULT_BLOCK_FILL, parseBlockFill, toColorInputValue, toRgbText } from "./color";
+export type { BlockFill } from "./color";
+let cachedColorKey: unknown = null;
+let cachedColorValue: readonly [number, number, number] = DEFAULT_BLOCK_FILL;
+
+/**
+ * 读当前配置色。设置页每帧都可能被读到，用「配置字符串」作缓存键，
+ * 避免逐帧解析；配置未变时连字符串比较都省掉常见分支。
+ */
+export function resolveBlockFill(): readonly [number, number, number] {
+    const raw = shared.game?.ptmain?.gameConfig?.blockAreaColor;
+    if (raw === cachedColorKey) return cachedColorValue;
+    cachedColorKey = raw;
+    cachedColorValue = parseBlockFill(raw);
+    return cachedColorValue;
+}
 
 interface Vec2 {
     x: number;

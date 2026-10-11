@@ -7,7 +7,7 @@
  * 不做逐像素 destination-out —— 那是 GPU 材质路径的近似，语义不精确。
  */
 import { simphiPlayer } from "../../playerMain";
-import { BLOCK_FILL } from "./index";
+import { resolveBlockFill } from "./index";
 
 const DISABLED_FILL_ALPHA = 0.4; // 官方 uDisabledFillOpacity
 const READY_SHINE_SPEED = 37.9; // 官方 _ShineSpeed
@@ -182,8 +182,10 @@ export function drawBlockAreas(
         }
     };
 
-    paint(disabledBlocks, `rgba(${BLOCK_FILL[0]},${BLOCK_FILL[1]},${BLOCK_FILL[2]},${DISABLED_FILL_ALPHA})`);
-    paint(activeBlocks, `rgba(${BLOCK_FILL[0]},${BLOCK_FILL[1]},${BLOCK_FILL[2]},1)`);
+    // 颜色每帧现读：设置页改色后无需重开谱面即可生效（内部按配置字符串缓存解析）。
+    const [fillR, fillG, fillB] = resolveBlockFill();
+    paint(disabledBlocks, `rgba(${fillR},${fillG},${fillB},${DISABLED_FILL_ALPHA})`);
+    paint(activeBlocks, `rgba(${fillR},${fillG},${fillB},1)`);
 
     ctx.drawImage(maskCanvas, 0, 0, mw, mh, 0, 0, width, height);
 

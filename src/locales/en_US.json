@@ -558,6 +558,9 @@
                     "bright": "Brighter",
                     "light": "Brightest"
                 },
+                "blockAreaColor": "Noise Zone Color",
+                "blockAreaColorReset": "Reset",
+                "blockAreaColorHint": "Tap the swatch to open the system color picker; default rgb(77, 34, 32)",
                 "defaultRankMethod": "Ranking Method Preference",
                 "defaultRankMethodOptions": {
                     "score": "by Score",

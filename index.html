@@ -581,6 +581,35 @@
                                         </select>
                                     </div>
                                     <div>
+                                        {{ $t("settings.settings.display.blockAreaColor") }}{{
+                                        $t("info.colon") }}
+                                        <input
+                                            type="color"
+                                            id="blockAreaColor"
+                                            v-model="blockAreaColorValue"
+                                            style="
+                                                width: 3em;
+                                                height: 1.4em;
+                                                vertical-align: middle;
+                                                padding: 0;
+                                                border: none;
+                                                background: none;
+                                                cursor: pointer;
+                                            "
+                                        />
+                                        <span style="margin-left: 6px">{{ blockAreaColorText }}</span>
+                                        <input
+                                            type="button"
+                                            :value='$t("settings.settings.display.blockAreaColorReset")'
+                                            @click="resetBlockAreaColor"
+                                            style="margin-left: 6px"
+                                        />
+                                    </div>
+                                    <div style="font-size: small; color: gray">
+                                        {{ $t("settings.settings.display.blockAreaColorHint") }}
+                                    </div>
+                                    <br />
+                                    <div>
                                         {{ $t("settings.settings.display.defaultRankMethod") }}{{
                                         $t("info.colon") }}
                                         <select
