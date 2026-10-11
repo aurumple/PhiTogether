@@ -1,6 +1,6 @@
 {
  "version": 1,
- "generated_at": "2026-09-26",
+ "generated_at": "2026-10-11",
  "chapters": [
   {
    "id": "legacy",
@@ -91,7 +91,14 @@
     "Implexrough.Silentroommommy",
     "Evanescent.LeaF",
     "EntrancetotheChaos.打打だいずvssiromaru",
-    "ExoplanetaryMirage.かめりあ"
+    "ExoplanetaryMirage.かめりあ",
+    "TrueHomeTrueWorldRework.816ThreeNumbers",
+    "Ametrine.GRYSCLMIssionary",
+    "Petrichor.voidMournfinale",
+    "ハテ.rNFrums",
+    "DesultorySignals.technoplanet",
+    "Message.くるぶっこちゃん",
+    "WhatdoyouwantmorethanaHappyending.Apo11oHALOprogramft安月名莉子大瀬良あい"
    ]
   },
   {
@@ -573,5 +580,5 @@
    "songs": []
   }
  ],
- "note": "ch9/single members added from the 4.0.0 APK (GameInformation mainSongs order + single.txt) before the wiki datasets catch up."
+ "note": "ch9 members (4.0.0 first part + 4.0.1 second part) added from the 4.0.x APK GameInformation order before the wiki datasets catch up; wiki-derived builds put these in 其他 until then."
 }
