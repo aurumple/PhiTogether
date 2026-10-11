@@ -23,6 +23,8 @@ import { Emitter } from "./utils/Emitter";
 import { playBgm, playVideo } from "./utils/mediaPlayer";
 
 import { judgeManager } from "./components/JudgeManager";
+import { BlockAreaSystem } from "./components/BlockArea";
+import { drawBlockAreas } from "./components/BlockArea/renderer";
 import { HitManager } from "./components/HitManager";
 import { HitEvents } from "./components/HitManager/HitEvents";
 import { HitWord } from "./components/HitManager/HitWord";
@@ -194,6 +196,8 @@ export const simphiPlayer = {
     plugins: { videoRecorder },
 
     modify: a => a,
+    /** Phigros 4.0 噪域（blockAreaList）：加载/判定/渲染见 components/BlockArea/。 */
+    blockArea: new BlockAreaSystem(),
     pressTime: 0,
     before: new Map(),
     now: new Map(),
@@ -554,6 +558,7 @@ simphiPlayer.playController.addEventListener(PlayEvent.Stop, async function () {
     simphiPlayer.timeInfo.curTime = 0;
     simphiPlayer.timeInfo.curTime_ms = 0;
     simphiPlayer.timeInfo.duration = 0;
+    simphiPlayer.blockArea.reset();
     for (const i of simphiPlayer.end.values()) await i();
 });
 simphiPlayer.playController.addEventListener(PlayEvent.Play, async function () {
@@ -564,6 +569,8 @@ simphiPlayer.playController.addEventListener(PlayEvent.Play, async function () {
     simphiPlayer.app.stage.style.display = "block";
     for (const i of simphiPlayer.before.values()) await i();
     audio.play(simphiPlayer.res["mute"], { loop: true, isOut: false }); //播放空音频(避免音画不同步)
+    // 噪域数据随谱面一起进来（reader 原样保留未知顶层键），在预渲染时挂载
+    simphiPlayer.blockArea.load(simphiPlayer.chartData.charts.get(simphiPlayer.selectchart.value)?.blockAreaList);
     simphiPlayer.app.prerenderChart(
         simphiPlayer.modify(simphiPlayer.chartData.charts.get(simphiPlayer.selectchart.value))
     ); //fuckqwq

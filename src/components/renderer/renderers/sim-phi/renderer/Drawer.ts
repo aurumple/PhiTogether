@@ -9,6 +9,7 @@ import { gauge } from "../plugins/gauge.js";
 
 import { drawNotes } from "./Notes";
 import { drawLine } from "./Lines";
+import { drawBlockAreas } from "../components/BlockArea/renderer";
 
 import { ChartPlayInfoDefaults } from "@utils/types/ChartPlayInfo";
 
@@ -64,6 +65,14 @@ export function loopCanvas() {
         simphiPlayer.tmps.customBackDraw != null
     )
         simphiPlayer.tmps.customBackDraw(simphiPlayer.app.ctxos); // 自定义背景
+    // 噪域（层级：背景 < 噪域 < 判定线/音符，与官方一致）
+    if (simphiPlayer.blockArea.hasAreas && simphiPlayer.animationInfo.isInEnd)
+        drawBlockAreas(
+            simphiPlayer.app.ctxos,
+            simphiPlayer.app.canvasos.width,
+            simphiPlayer.app.canvasos.height,
+            simphiPlayer.timeInfo.timeBgm
+        );
     // if (qwq[4]) ctxos.filter = `hue-rotate(${stat.combo*360/7}deg)`;
     if (simphiPlayer.animationInfo.isInEnd || simphiPlayer.animationTimer.in.second >= 2.5)
         drawLine(simphiPlayer.stat.lineStatus ? 2 : 1, lineScale); //绘制判定线(背景前1)

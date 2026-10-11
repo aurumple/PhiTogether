@@ -253,6 +253,10 @@ function loopNoCanvas() {
     }
     //更新判定
     simphiPlayer.hitManager.update();
+    //噪域染色：在 hitManager.update 之后、打击反馈与判定之前，
+    //把落在 Active 块内的触点从列表移除（其下音符走正常 miss 流程）
+    if (simphiPlayer.blockArea.hasAreas && !simphiPlayer.app.pauseTime)
+        simphiPlayer.blockArea.update(simphiPlayer.timeInfo.timeBgm);
     simphiPlayer.tmps.bgImage = shared.game.ptmain.gameConfig.imageBlur
         ? simphiPlayer.app.bgImageBlur
         : simphiPlayer.app.bgImage;
